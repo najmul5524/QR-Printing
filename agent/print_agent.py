@@ -5,14 +5,15 @@ import json
 import asyncio
 import tempfile
 import urllib.request
+import ssl
 import websockets
 
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(AGENT_DIR, "agent_config.json")
 
 DEFAULT_CONFIG = {
-    "server_url": "http://localhost:8000",
-    "api_key": "qsp_demo_key_here"
+    "server_url": "https://qr-printing.onrender.com",
+    "api_key": ""
 }
 
 def load_config():
@@ -117,41 +118,45 @@ async def run_agent():
     print("=" * 60)
     
     config = load_config()
-    server_url = config.get("server_url", "http://localhost:8000").rstrip("/")
+    server_url = config.get("server_url", "https://qr-printing.onrender.com").rstrip("/")
     api_key = config.get("api_key", "").strip()
     
     # If API key is not configured or default, prompt user
-    if not api_key or api_key == "qsp_demo_key_here":
-        print("\n[!] আপনার দোকানের API Key এখনো কনফিগার করা হয়নি।")
-        print("    দোকানদার ড্যাশবোর্ড (/admin) এর হলুদ ব্যানারে আপনার API Key আছে।")
-        entered_key = input("👉 আপনার API Key টি এখানে পেস্ট করে Enter চাপুন: ").strip()
+    while not api_key or api_key == "qsp_demo_key_here":
+        print(f"\n[*] বর্তমান সার্ভার: {server_url}")
+        print("    আপনার ড্যাশবোর্ডে (/admin) লগইন করে ওপরের হলুদ বক্স থেকে API Key কপি করুন।")
+        entered_key = input("👉 আপনার দোকানের API Key টি এখানে পেস্ট করে Enter চাপুন: ").strip()
         if entered_key:
             api_key = entered_key
             config["api_key"] = api_key
             save_config(config)
-            print(f"[✓] API Key সফলভাবে সেভ হয়েছে!\n")
+            print(f"[✓] API Key সংরক্ষিত হয়েছে!\n")
+            break
         else:
-            print("[!] কোনো API Key দেওয়া হয়নি। প্রোগ্রাম বন্ধ হচ্ছে।")
-            input("Press Enter to exit...")
-            return
+            print("[!] API Key ফাঁকা রাখা যাবে না। আবার চেষ্টা করুন।")
             
     ws_protocol = "wss" if server_url.startswith("https") else "ws"
     host_port = server_url.split("://")[-1]
-    ws_url = f"{ws_protocol}://{host_port}/ws/agent/{api_key}"
     
+    # SSL context for Render
+    ssl_context = None
+    if ws_protocol == "wss":
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
     print(f"[*] সার্ভার: {server_url}")
     print(f"[*] শপ API Key: {api_key[:8]}...{api_key[-4:] if len(api_key)>12 else ''}")
-    print(f"[*] সংযোগ চেষ্টা করা হচ্ছে...")
+    print(f"[*] সংযোগ স্থাপন করা হচ্ছে...")
     
     retry_delay = 3
-    first_attempt = True
     while True:
+        ws_url = f"{ws_protocol}://{host_port}/ws/agent/{api_key}"
         try:
-            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
+            async with websockets.connect(ws_url, ssl=ssl_context, ping_interval=20, ping_timeout=20) as ws:
                 print(f"\n[🟢 ONLINE] সফলভাবে সার্ভারের সাথে সংযুক্ত হয়েছে!")
                 print(f"[*] নতুন প্রিন্ট অর্ডারের জন্য অপেক্ষা করা হচ্ছে...\n")
                 retry_delay = 3
-                first_attempt = False
                 
                 while True:
                     raw_msg = await ws.recv()
@@ -159,21 +164,23 @@ async def run_agent():
                     if data.get("event") == "PRINT_JOB":
                         await handle_print_job(data.get("data", {}), server_url, api_key, ws)
                         
-        except (websockets.exceptions.InvalidStatusCode, websockets.exceptions.NegotiationError) as e:
-            print(f"\n[❌ ত্রুটি] API Key সঠিক নয়! ড্যাশবোর্ড থেকে সঠিক কী দিন।")
-            config["api_key"] = "qsp_demo_key_here"
-            save_config(config)
-            input("Press Enter to exit...")
-            return
-        except (ConnectionRefusedError, OSError) as e:
-            if "localhost" in server_url or "127.0.0.1" in server_url:
-                print(f"\r[🔴 অফলাইন] লোকাল সার্ভার ({server_url}) বন্ধ আছে। আগে 'python main.py' চালু করুন। প্রতি {retry_delay}s পর রিট্রাই হবে...", end="")
+        except (websockets.exceptions.InvalidStatusCode, websockets.exceptions.InvalidHandshake, Exception) as e:
+            err_msg = str(e)
+            if "403" in err_msg or "1008" in err_msg or "rejected" in err_msg:
+                print(f"\n[❌ ভুল API Key] সার্ভার এই কী ({api_key}) গ্রহণ করেনি!")
+                print(f"👉 দয়া করে {server_url}/admin পেজ থেকে আপনার বর্তমান সঠিক API Key টি কপি করে এখানে দিন:")
+                new_key = input("সঠিক API Key: ").strip()
+                if new_key:
+                    api_key = new_key
+                    config["api_key"] = api_key
+                    save_config(config)
+                    print(f"[+] নতুন কী সেভ হয়েছে। পুনরায় কানেক্ট হচ্ছে...")
+                    continue
+            elif "ConnectionRefused" in err_msg or "WinError 10061" in err_msg:
+                print(f"\r[🔴 অফলাইন] লোকাল সার্ভার বন্ধ। সার্ভার চালু করুন। রিট্রাই হচ্ছে ({retry_delay}s)...", end="")
             else:
-                print(f"\r[🔴 অফলাইন] ইন্টারনেটে সংযোগ পাওয়া যায়নি ({e})। রিট্রাই হচ্ছে ({retry_delay}s)...", end="")
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay + 2, 20)
-        except Exception as e:
-            print(f"\r[!] সংযোগ বিচ্ছিন্ন ({e})। পুনরায় চেষ্টা চলছে ({retry_delay}s)...", end="")
+                print(f"\r[!] সার্ভারে সংযোগ বিচ্ছিন্ন ({err_msg})। রিট্রাই হচ্ছে ({retry_delay}s)...", end="")
+                
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay + 2, 20)
 
