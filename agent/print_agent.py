@@ -235,3 +235,19 @@ if __name__ == "__main__":
         asyncio.run(run_agent())
     except KeyboardInterrupt:
         print("\n[*] Agent stopped by user.")
+    except Exception as fatal_err:
+        import traceback
+        err_details = traceback.format_exc()
+        print(f"\n[FATAL ERROR] Agent crashed unexpectedly:")
+        print(err_details)
+        
+        # Write error to a log file next to the agent
+        log_path = os.path.join(AGENT_DIR, "agent_error.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write(err_details)
+            print(f"[*] Error details saved to: {log_path}")
+        except Exception:
+            pass
+        
+        input("\nPress Enter to close...")
