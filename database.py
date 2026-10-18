@@ -84,7 +84,7 @@ def init_db():
     # Seed a demo shop if no shops exist
     cursor.execute("SELECT COUNT(*) as count FROM shops")
     if cursor.fetchone()["count"] == 0:
-        demo_api_key = "qsp_" + secrets.token_hex(12)
+        demo_api_key = "qsp_demo_satata_101"
         now = datetime.now().isoformat()
         cursor.execute("""
         INSERT INTO shops (
@@ -128,6 +128,10 @@ def get_shop_by_api_key(api_key: str) -> Optional[sqlite3.Row]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE api_key = ? AND is_active = 1", (api_key,))
     shop = cursor.fetchone()
+    if not shop and api_key == "qsp_demo_satata_101":
+        # Always fallback to demo shop if master demo key is used
+        cursor.execute("SELECT * FROM shops WHERE shop_code = 'demo101' AND is_active = 1")
+        shop = cursor.fetchone()
     conn.close()
     return shop
 
