@@ -1,0 +1,14 @@
+@echo off
+title QR Se Print - Windows Print Agent
+color 0A
+cd /d "%~dp0agent"
+echo ======================================================
+echo       QR Se Print - Auto Print Desktop Agent
+echo ======================================================
+echo.
+python print_agent.py
+echo.
+echo ======================================================
+echo Agent stopped. Press any key to close this window.
+echo ======================================================
+pause
