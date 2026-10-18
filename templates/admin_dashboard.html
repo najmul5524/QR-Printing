@@ -84,13 +84,18 @@
         <span class="text-2xl">⚠️</span>
         <div>
           <h4 class="font-bold text-sm text-yellow-900">দোকানের উইন্ডোজ প্রিন্ট এজেন্ট সংযুক্ত নেই!</h4>
-          <p class="text-xs text-yellow-700">স্বয়ংক্রিয় প্রিন্ট পেতে আপনার পিসিতে <code>agent/start_agent.bat</code> ফাইলটি রান করুন।</p>
+          <p class="text-xs text-yellow-700">স্বয়ংক্রিয় প্রিন্ট পেতে আপনার পিসিতে <code>run_agent.bat</code> চালু করুন (লগইন বা API Key দিন)।</p>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-gray-500">আপনার API Key:</span>
-        <code class="px-2 py-1 bg-white border border-yellow-300 rounded text-xs font-mono font-bold">{{ shop.api_key }}</code>
-        <button onclick="copyApiKey('{{ shop.api_key }}')" class="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 text-xs font-bold rounded">কপি</button>
+      <div class="flex flex-wrap items-center gap-2">
+        <a href="/admin/download-config" download="agent_config.json" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm">
+          <span>📥</span> <span>agent_config.json ডাউনলোড</span>
+        </a>
+        <div class="flex items-center gap-1 bg-white border border-yellow-300 rounded px-2 py-1">
+          <span class="text-[11px] text-gray-400">Key:</span>
+          <code class="text-xs font-mono font-bold">{{ shop.api_key }}</code>
+          <button onclick="copyApiKey('{{ shop.api_key }}')" class="ml-1 text-[11px] bg-yellow-100 hover:bg-yellow-200 px-1.5 py-0.5 font-bold rounded">কপি</button>
+        </div>
       </div>
     </div>
 

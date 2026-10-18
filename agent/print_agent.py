@@ -122,6 +122,58 @@ async def handle_print_job(job_data: dict, server_url: str, api_key: str, websoc
         except Exception as err:
             print(f"[!] File delete error: {err}")
 
+def prompt_login_or_key(server_url: str, config: dict) -> str:
+    print("\n" + "=" * 60)
+    print("      QR Se Print - Agent Authentication Setup")
+    print("=" * 60)
+    print(f"Server: {server_url}")
+    print("\nChoose an option to connect your printer:")
+    print(" [1] Login with Shop Mobile & Password (মোবাইল ও পাসওয়ার্ড দিয়ে লগইন)")
+    print(" [2] Paste Shop API Key (API Key পেস্ট করুন)")
+    print("-" * 60)
+    
+    choice = input("Enter choice [1 or 2, default=1]: ").strip()
+    if choice == "2":
+        while True:
+            k = input(">> Paste your Shop API Key: ").strip()
+            if k:
+                config["api_key"] = k
+                save_config(config)
+                print("[OK] API Key saved to agent_config.json!\n")
+                return k
+            print("[!] API Key cannot be empty.")
+    else:
+        while True:
+            phone = input(">> Shop Mobile Number (যেমন: 01700000000): ").strip()
+            password = input(">> Shop Password (যেমন: 123456): ").strip()
+            if not phone or not password:
+                print("[!] Mobile and password cannot be empty.")
+                continue
+                
+            print(f"[*] Authenticating with {server_url}...")
+            try:
+                login_endpoint = f"{server_url.rstrip('/')}/api/agent/login"
+                req_data = json.dumps({"phone": phone, "password": password}).encode("utf-8")
+                req = urllib.request.Request(
+                    login_endpoint,
+                    data=req_data,
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    res_body = json.loads(resp.read().decode("utf-8"))
+                    if res_body.get("success"):
+                        new_key = res_body["api_key"]
+                        shop_name = res_body.get("shop_name", "Shop")
+                        config["api_key"] = new_key
+                        save_config(config)
+                        print(f"[OK] Login successful! Welcome, {shop_name}")
+                        print(f"[OK] Config saved to agent_config.json!\n")
+                        return new_key
+            except urllib.error.HTTPError as he:
+                print(f"[!] Login failed: Invalid mobile or password (HTTP {he.code}). Try again.\n")
+            except Exception as ex:
+                print(f"[!] Connection error: {ex}. Try again.\n")
+
 async def run_agent():
     print("=" * 60)
     print("      QR Se Print - Windows Desktop Auto-Print Agent       ")
@@ -131,19 +183,9 @@ async def run_agent():
     server_url = config.get("server_url", "https://qr-printing.onrender.com").rstrip("/")
     api_key = config.get("api_key", "").strip()
     
-    # If API key is not configured or default, prompt user
-    while not api_key or api_key == "qsp_demo_key_here":
-        print(f"\n[*] Target Server: {server_url}")
-        print("    Please log into your Admin Dashboard (/admin) and copy your API Key.")
-        entered_key = input(">> Enter or paste your Shop API Key here: ").strip()
-        if entered_key:
-            api_key = entered_key
-            config["api_key"] = api_key
-            save_config(config)
-            print(f"[OK] API Key saved to agent_config.json!\n")
-            break
-        else:
-            print("[!] API Key cannot be empty. Please try again.")
+    # If API key is not configured, prompt user
+    if not api_key:
+        api_key = prompt_login_or_key(server_url, config)
             
     ws_protocol = "wss" if server_url.startswith("https") else "ws"
     host_port = server_url.split("://")[-1]
@@ -178,14 +220,8 @@ async def run_agent():
             err_msg = str(e)
             if "403" in err_msg or "1008" in err_msg or "rejected" in err_msg:
                 print(f"\n[ERROR] Server rejected this API Key ({api_key})!")
-                print(f">> Please copy the correct API Key from {server_url}/admin:")
-                new_key = input("New API Key: ").strip()
-                if new_key:
-                    api_key = new_key
-                    config["api_key"] = api_key
-                    save_config(config)
-                    print(f"[OK] New key saved. Reconnecting...")
-                    continue
+                api_key = prompt_login_or_key(server_url, config)
+                continue
             elif "ConnectionRefused" in err_msg or "WinError 10061" in err_msg:
                 print(f"\r[OFFLINE] Server not reachable. Retrying in {retry_delay}s...", end="")
             else:

@@ -273,6 +273,46 @@ async def qr_standee(request: Request):
         "customer_url": customer_url
     })
 
+@app.get("/admin/download-config")
+async def download_agent_config(request: Request):
+    """Generates and downloads a pre-configured agent_config.json for the logged in shop."""
+    shop = get_current_shop(request)
+    if not shop:
+        return RedirectResponse(url="/login")
+        
+    host = request.headers.get("host", "localhost:8000")
+    proto = "https" if "render.com" in host or request.headers.get("x-forwarded-proto") == "https" else "http"
+    server_url = f"{proto}://{host}"
+    
+    cfg_data = json.dumps({
+        "server_url": server_url,
+        "api_key": shop["api_key"]
+    }, indent=4)
+    
+    return Response(
+        content=cfg_data,
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=agent_config.json"}
+    )
+
+@app.post("/api/agent/login")
+async def agent_login(request: Request):
+    """Allows Windows agent to authenticate directly using phone & password and retrieve active API Key."""
+    data = await request.json()
+    phone = data.get("phone", "").strip()
+    password = data.get("password", "").strip()
+    
+    shop = db.authenticate_shop(phone, password)
+    if not shop:
+        raise HTTPException(status_code=401, detail="ভুল মোবাইল নম্বর অথবা পাসওয়ার্ড!")
+        
+    return {
+        "success": True,
+        "api_key": shop["api_key"],
+        "shop_name": shop["name"],
+        "shop_code": shop["shop_code"]
+    }
+
 @app.post("/admin/order/{order_id}/approve")
 async def approve_order(order_id: str, request: Request):
     shop = get_current_shop(request)
