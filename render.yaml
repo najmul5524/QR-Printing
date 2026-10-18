@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: qr-se-print
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: BASE_URL
+        value: https://qr-se-print.onrender.com

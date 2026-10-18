@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>{{ shop.name }} | QR Se Print</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Hind Siliguri', sans-serif; -webkit-tap-highlight-color: transparent; }
+    .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen pb-16">
+
+  <!-- Top Sticky Header -->
+  <header class="bg-white border-b sticky top-0 z-40 shadow-sm">
+    <div class="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+      <div>
+        <h1 class="font-bold text-lg text-gray-900 leading-tight">{{ shop.name }}</h1>
+        <p class="text-xs text-gray-500">প্রোপ্রাইটর: {{ shop.owner_name or "দোকানদার" }}</p>
+      </div>
+      <div class="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-semibold">
+        <span class="w-2 h-2 rounded-full bg-green-500 pulse-dot"></span>
+        <span>সক্রিয়</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-lg mx-auto px-4 py-4 space-y-4">
+
+    <!-- Step 1: Upload Box -->
+    <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm" id="uploadCard">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold text-gray-800 text-base flex items-center gap-1.5">
+          <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">1</span>
+          ডকুমেন্ট বা ছবি সিলেক্ট করুন
+        </h2>
+        <a href="/resume" class="text-xs text-pink-600 font-bold hover:underline">📝 রেজুমে তৈরি?</a>
+      </div>
+
+      <!-- Dropzone -->
+      <div id="dropzone" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-6 text-center cursor-pointer transition bg-gray-50 hover:bg-pink-50/20">
+        <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/webp" class="hidden">
+        <div class="text-3xl mb-1">📄</div>
+        <p class="font-bold text-gray-700 text-sm">ফাইল ড্রপ করুন অথবা ক্লিক করুন</p>
+        <p class="text-xs text-gray-400 mt-1">PDF, JPG, PNG (সর্বোচ্চ ৫০ MB)</p>
+      </div>
+
+      <!-- Uploading state -->
+      <div id="uploadProgress" class="hidden mt-3 space-y-1">
+        <div class="flex justify-between text-xs text-gray-500">
+          <span>ফাইল আপলোড ও পেজ প্রসেসিং হচ্ছে...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
+          <div id="progressBar" class="bg-pink-600 h-full w-0 transition-all duration-300"></div>
+        </div>
+      </div>
+
+      <!-- Uploaded File Badge -->
+      <div id="fileInfoBadge" class="hidden mt-3 p-3 bg-pink-50 border border-pink-200 rounded-xl flex items-center justify-between">
+        <div class="flex items-center gap-2 overflow-hidden">
+          <span class="text-2xl" id="fileIcon">📄</span>
+          <div class="truncate">
+            <p class="font-bold text-gray-800 text-sm truncate" id="fileNameText">document.pdf</p>
+            <p class="text-xs text-pink-600 font-semibold" id="fileMetaText">পেজ সংখ্যা: ১</p>
+          </div>
+        </div>
+        <button id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg">&times;</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Print Settings -->
+    <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm opacity-60 pointer-events-none transition" id="settingsCard">
+      <h2 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-1.5">
+        <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">2</span>
+        প্রিন্ট অপশন ঠিক করুন
+      </h2>
+
+      <!-- Paper Size / Mode -->
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">প্রিন্টের ধরন</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optDocA4">
+              <input type="radio" name="paper_size" value="A4" checked class="hidden">
+              <span class="text-sm font-bold">📄 সাধারণ A4 ডকুমেন্ট</span>
+            </label>
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-gray-200 text-gray-700" id="optPhoto">
+              <input type="radio" name="paper_size" value="4x6" class="hidden">
+              <span class="text-sm font-bold">📷 ৪×৬ পাসপোর্ট শিট</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Color Selection -->
+        <div id="colorModeWrapper">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">কালার মোড</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optBw">
+              <input type="radio" name="color_mode" value="bw" checked class="hidden">
+              <div>
+                <p class="text-sm font-bold">সাদাকালো (B&W)</p>
+                <p class="text-xs text-gray-500">৳{{ shop.rate_bw_single }}/পেজ</p>
+              </div>
+            </label>
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-gray-200 text-gray-700" id="optColor">
+              <input type="radio" name="color_mode" value="color" class="hidden">
+              <div>
+                <p class="text-sm font-bold">রঙিন (Color)</p>
+                <p class="text-xs text-gray-500">৳{{ shop.rate_color_single }}/পেজ</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Duplex / Single Side Selection -->
+        <div id="duplexWrapper">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">প্রিন্ট সাইড</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optSingle">
+              <input type="radio" name="duplex" value="single" checked class="hidden">
+              <div>
+                <p class="text-sm font-bold">এক পিঠ (Single-sided)</p>
+              </div>
+            </label>
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-gray-200 text-gray-700" id="optDouble">
+              <input type="radio" name="duplex" value="double" class="hidden">
+              <div>
+                <p class="text-sm font-bold">উভয় পিঠ (Duplex)</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Copies -->
+        <div class="flex items-center justify-between pt-2 border-t">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600">কপি সংখ্যা</label>
+            <span class="text-xs text-gray-400">কত সেট প্রিন্ট চান</span>
+          </div>
+          <div class="flex items-center border rounded-xl overflow-hidden">
+            <button type="button" id="btnMinusCopy" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 font-bold text-gray-700 text-base">-</button>
+            <input type="number" id="inputCopies" value="1" min="1" max="100" class="w-12 text-center text-sm font-bold outline-none" readonly>
+            <button type="button" id="btnPlusCopy" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 font-bold text-gray-700 text-base">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Payment & Summary -->
+    <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm opacity-60 pointer-events-none transition" id="paymentCard">
+      <h2 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-1.5">
+        <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">3</span>
+        পেমেন্ট ও অর্ডার কনফার্ম
+      </h2>
+
+      <!-- Total Price Banner -->
+      <div class="bg-gradient-to-r from-pink-50 to-orange-50 border border-pink-200 rounded-xl p-3.5 mb-4 flex items-center justify-between">
+        <div>
+          <span class="text-xs font-semibold text-gray-500 uppercase">সর্বমোট বিল</span>
+          <p class="text-xs text-gray-400" id="billSummaryText">১ পেজ × ১ কপি</p>
+        </div>
+        <div class="text-right">
+          <span class="text-2xl font-black text-pink-600" id="totalPriceText">৳ 0</span>
+        </div>
+      </div>
+
+      <!-- Payment Method Selection -->
+      <div class="space-y-3">
+        <label class="block text-xs font-semibold text-gray-600">পেমেন্ট মাধ্যম বেছে নিন</label>
+        
+        <div class="grid grid-cols-3 gap-2 text-center">
+          {% if shop.allow_counter_cash %}
+          <label class="border-2 rounded-xl p-2 cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="payMethodCash">
+            <input type="radio" name="payment_method" value="counter_cash" checked class="hidden">
+            <span class="text-xl">💵</span>
+            <p class="text-xs font-bold mt-1">কাউন্টার ক্যাশ</p>
+          </label>
+          {% endif %}
+
+          {% if shop.bkash_number %}
+          <label class="border-2 rounded-xl p-2 cursor-pointer border-gray-200 text-gray-700" id="payMethodBkash">
+            <input type="radio" name="payment_method" value="bkash" class="hidden">
+            <span class="text-xl">🌸</span>
+            <p class="text-xs font-bold mt-1">বিকাশ</p>
+          </label>
+          {% endif %}
+
+          {% if shop.nagad_number %}
+          <label class="border-2 rounded-xl p-2 cursor-pointer border-gray-200 text-gray-700" id="payMethodNagad">
+            <input type="radio" name="payment_method" value="nagad" class="hidden">
+            <span class="text-xl">🔥</span>
+            <p class="text-xs font-bold mt-1">নগদ</p>
+          </label>
+          {% endif %}
+        </div>
+
+        <!-- MFS Info Box (bKash/Nagad) -->
+        <div id="mfsDetailsBox" class="hidden p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-xs space-y-2">
+          <p class="font-bold text-yellow-900" id="mfsInstruction">দোকানের বিকাশ নম্বরে সেন্ড মানি করুন:</p>
+          <div class="flex items-center justify-between bg-white px-3 py-2 rounded-lg border font-mono font-bold text-sm text-gray-800">
+            <span id="mfsNumber">{{ shop.bkash_number or shop.nagad_number }}</span>
+            <button type="button" onclick="copyMfsNumber()" class="text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-gray-700">কপি</button>
+          </div>
+          <div>
+            <label class="block font-semibold text-gray-700 mb-1">TrxID (ট্রানজেকশন আইডি) দিন:</label>
+            <input type="text" id="trxIdInput" placeholder="যেমন: 9J38K1LS..." class="w-full px-3 py-2 border rounded-lg uppercase outline-none text-sm font-mono">
+          </div>
+        </div>
+
+        <!-- Customer Name/Phone (optional) -->
+        <div class="pt-2">
+          <input type="text" id="custNameInput" placeholder="আপনার নাম (ঐচ্ছিক)" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+        </div>
+
+        <!-- Confirm Print Button -->
+        <button type="button" id="btnConfirmOrder" class="w-full py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition flex items-center justify-center gap-2 text-base">
+          <span>🖨️ প্রিন্ট অর্ডার নিশ্চিত করুন</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Order Tracker Modal / Fullscreen Overlay -->
+    <div id="trackerOverlay" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="bg-white max-w-sm w-full rounded-2xl p-6 text-center shadow-2xl space-y-5 animate-fade-in">
+        <div class="w-16 h-16 mx-auto rounded-full bg-pink-50 border border-pink-200 flex items-center justify-center text-3xl" id="statusIcon">
+          ⏳
+        </div>
+        <div>
+          <h3 class="text-xl font-bold text-gray-900" id="statusTitle">অর্ডার গ্রহণ করা হয়েছে</h3>
+          <p class="text-xs text-gray-500 mt-1 font-mono" id="statusOrderId">Order ID: #</p>
+        </div>
+
+        <p class="text-sm text-gray-700 bg-gray-50 p-3 rounded-xl border border-gray-100" id="statusMessage">
+          কাউন্টার থেকে পেমেন্ট নিশ্চিত করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন...
+        </p>
+
+        <!-- Live Step Animation -->
+        <div class="space-y-2 text-left text-xs text-gray-600">
+          <div class="flex items-center gap-2" id="step1">
+            <span class="w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]">✓</span>
+            <span>ফাইল আপলোড সম্পন্ন</span>
+          </div>
+          <div class="flex items-center gap-2" id="step2">
+            <span class="w-4 h-4 rounded-full bg-gray-300 text-white flex items-center justify-center text-[10px]" id="step2Dot">2</span>
+            <span id="step2Text">পেমেন্ট নিশ্চিতকরণ</span>
+          </div>
+          <div class="flex items-center gap-2" id="step3">
+            <span class="w-4 h-4 rounded-full bg-gray-300 text-white flex items-center justify-center text-[10px]" id="step3Dot">3</span>
+            <span id="step3Text">প্রিন্টারে প্রিন্ট হচ্ছে</span>
+          </div>
+          <div class="flex items-center gap-2" id="step4">
+            <span class="w-4 h-4 rounded-full bg-gray-300 text-white flex items-center justify-center text-[10px]" id="step4Dot">4</span>
+            <span id="step4Text">প্রিন্ট সম্পন্ন ও ফাইল নিরাপদ ডিলিট</span>
+          </div>
+        </div>
+
+        <div id="trackerActionBtn" class="hidden">
+          <button onclick="location.reload()" class="w-full py-2.5 bg-gray-900 text-white text-sm font-bold rounded-xl hover:bg-black transition">
+            নতুন ফাইল প্রিন্ট করুন
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // Rates & Shop data injected from backend
+    const SHOP_ID = {{ shop.id }};
+    const SHOP_CODE = "{{ shop.shop_code }}";
+    const BKASH_NUM = "{{ shop.bkash_number }}";
+    const NAGAD_NUM = "{{ shop.nagad_number }}";
+    const RATES = {
+      bw_single: {{ shop.rate_bw_single }},
+      bw_double: {{ shop.rate_bw_double }},
+      color_single: {{ shop.rate_color_single }},
+      color_double: {{ shop.rate_color_double }},
+      photo_4x6: {{ shop.rate_photo_4x6 }}
+    };
+
+    let uploadedFile = null; // { file_id, original_filename, file_type, page_count }
+    let activeOrderId = null;
+    let orderSocket = null;
+
+    // Elements
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const progressBar = document.getElementById('progressBar');
+    const progressPercent = document.getElementById('progressPercent');
+    const fileInfoBadge = document.getElementById('fileInfoBadge');
+    const fileNameText = document.getElementById('fileNameText');
+    const fileMetaText = document.getElementById('fileMetaText');
+    const btnRemoveFile = document.getElementById('btnRemoveFile');
+
+    const settingsCard = document.getElementById('settingsCard');
+    const paymentCard = document.getElementById('paymentCard');
+
+    const inputCopies = document.getElementById('inputCopies');
+    const btnMinusCopy = document.getElementById('btnMinusCopy');
+    const btnPlusCopy = document.getElementById('btnPlusCopy');
+    const totalPriceText = document.getElementById('totalPriceText');
+    const billSummaryText = document.getElementById('billSummaryText');
+
+    // MFS Details
+    const mfsDetailsBox = document.getElementById('mfsDetailsBox');
+    const mfsInstruction = document.getElementById('mfsInstruction');
+    const mfsNumber = document.getElementById('mfsNumber');
+
+    // File selection trigger
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
+    });
+
+    // Drag and Drop
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('border-pink-500'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('border-pink-500'));
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('border-pink-500');
+      if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+    });
+
+    async function handleFileUpload(file) {
+      dropzone.classList.add('hidden');
+      uploadProgress.classList.remove('hidden');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload', true);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const p = Math.round((e.loaded / e.total) * 100);
+          progressBar.style.width = p + '%';
+          progressPercent.innerText = p + '%';
+        }
+      };
+
+      xhr.onload = () => {
+        uploadProgress.classList.add('hidden');
+        if (xhr.status === 200) {
+          uploadedFile = JSON.parse(xhr.responseText);
+          showUploadedFile();
+        } else {
+          alert('ফাইল আপলোড ব্যর্থ হয়েছে। আবার চেষ্টা করুন।');
+          dropzone.classList.remove('hidden');
+        }
+      };
+
+      xhr.onerror = () => {
+        uploadProgress.classList.add('hidden');
+        dropzone.classList.remove('hidden');
+        alert('ইন্টারনেট সংযোগ সমস্যা।');
+      };
+
+      xhr.send(formData);
+    }
+
+    function showUploadedFile() {
+      fileNameText.innerText = uploadedFile.original_filename;
+      fileMetaText.innerText = `মোট পেজ: ${uploadedFile.page_count} টি`;
+      fileInfoBadge.classList.remove('hidden');
+
+      // Unlock settings & payment
+      settingsCard.classList.remove('opacity-60', 'pointer-events-none');
+      paymentCard.classList.remove('opacity-60', 'pointer-events-none');
+
+      calculateBill();
+    }
+
+    btnRemoveFile.addEventListener('click', () => {
+      uploadedFile = null;
+      fileInput.value = '';
+      fileInfoBadge.classList.add('hidden');
+      dropzone.classList.remove('hidden');
+      settingsCard.classList.add('opacity-60', 'pointer-events-none');
+      paymentCard.classList.add('opacity-60', 'pointer-events-none');
+      totalPriceText.innerText = '৳ 0';
+    });
+
+    // Option selections styling & calculation
+    function setupRadioGroup(groupIds, onChange) {
+      groupIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('click', () => {
+          groupIds.forEach(otherId => {
+            const o = document.getElementById(otherId);
+            if (o) {
+              o.classList.remove('border-pink-600', 'bg-pink-50', 'text-pink-900');
+              o.classList.add('border-gray-200', 'text-gray-700');
+            }
+          });
+          el.classList.add('border-pink-600', 'bg-pink-50', 'text-pink-900');
+          el.classList.remove('border-gray-200', 'text-gray-700');
+          el.querySelector('input').checked = true;
+          if (onChange) onChange();
+        });
+      });
+    }
+
+    setupRadioGroup(['optDocA4', 'optPhoto'], () => {
+      const isPhoto = document.querySelector('input[name="paper_size"]:checked').value === '4x6';
+      document.getElementById('colorModeWrapper').style.display = isPhoto ? 'none' : 'block';
+      document.getElementById('duplexWrapper').style.display = isPhoto ? 'none' : 'block';
+      calculateBill();
+    });
+
+    setupRadioGroup(['optBw', 'optColor'], calculateBill);
+    setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
+
+    // Payment methods
+    setupRadioGroup(['payMethodCash', 'payMethodBkash', 'payMethodNagad'], () => {
+      const method = document.querySelector('input[name="payment_method"]:checked').value;
+      if (method === 'bkash') {
+        mfsDetailsBox.classList.remove('hidden');
+        mfsInstruction.innerText = 'দোকানের বিকাশ নম্বরে সেন্ড মানি করুন:';
+        mfsNumber.innerText = BKASH_NUM;
+      } else if (method === 'nagad') {
+        mfsDetailsBox.classList.remove('hidden');
+        mfsInstruction.innerText = 'দোকানের নগদ নম্বরে সেন্ড মানি করুন:';
+        mfsNumber.innerText = NAGAD_NUM;
+      } else {
+        mfsDetailsBox.classList.add('hidden');
+      }
+    });
+
+    btnMinusCopy.addEventListener('click', () => {
+      let v = parseInt(inputCopies.value);
+      if (v > 1) { inputCopies.value = v - 1; calculateBill(); }
+    });
+    btnPlusCopy.addEventListener('click', () => {
+      let v = parseInt(inputCopies.value);
+      inputCopies.value = v + 1; calculateBill();
+    });
+
+    function calculateBill() {
+      if (!uploadedFile) return;
+
+      const paperSize = document.querySelector('input[name="paper_size"]:checked').value;
+      const copies = parseInt(inputCopies.value);
+      const pages = uploadedFile.page_count;
+
+      let total = 0;
+      if (paperSize === '4x6') {
+        total = RATES.photo_4x6 * copies;
+        billSummaryText.innerText = `৪×৬ পাসপোর্ট শিট × ${copies} কপি`;
+      } else {
+        const color = document.querySelector('input[name="color_mode"]:checked').value;
+        const duplex = document.querySelector('input[name="duplex"]:checked').value;
+        let rate = 0;
+        if (color === 'bw') {
+          rate = duplex === 'double' ? RATES.bw_double : RATES.bw_single;
+        } else {
+          rate = duplex === 'double' ? RATES.color_double : RATES.color_single;
+        }
+        total = rate * pages * copies;
+        billSummaryText.innerText = `${pages} পেজ (${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} কপি`;
+      }
+
+      totalPriceText.innerText = `৳ ${total.toFixed(2)}`;
+    }
+
+    function copyMfsNumber() {
+      navigator.clipboard.writeText(mfsNumber.innerText);
+      alert('নম্বর কপি করা হয়েছে!');
+    }
+
+    // Place Order
+    document.getElementById('btnConfirmOrder').addEventListener('click', async () => {
+      if (!uploadedFile) {
+        alert('অনুগ্রহ করে ফাইল আপলোড করুন।');
+        return;
+      }
+
+      const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
+      const trxId = document.getElementById('trxIdInput').value.trim();
+
+      if ((paymentMethod === 'bkash' || paymentMethod === 'nagad') && !trxId) {
+        alert('অনুগ্রহ করে বিকাশের/নগদের TrxID লিখুন।');
+        return;
+      }
+
+      const orderPayload = {
+        shop_id: SHOP_ID,
+        file_id: uploadedFile.file_id,
+        original_filename: uploadedFile.original_filename,
+        file_type: uploadedFile.file_type,
+        page_count: uploadedFile.page_count,
+        copies: parseInt(inputCopies.value),
+        paper_size: document.querySelector('input[name="paper_size"]:checked').value,
+        color_mode: document.querySelector('input[name="color_mode"]:checked').value,
+        duplex: document.querySelector('input[name="duplex"]:checked').value,
+        payment_method: paymentMethod,
+        trx_id: trxId,
+        customer_name: document.getElementById('custNameInput').value.trim() || 'Walk-in'
+      };
+
+      try {
+        const res = await fetch('/api/order/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(orderPayload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          activeOrderId = data.order_id;
+          openTracker(activeOrderId);
+        } else {
+          alert('অর্ডার তৈরিতে সমস্যা হয়েছে।');
+        }
+      } catch (err) {
+        alert('সার্ভারে সংযোগ পাওয়া যায়নি।');
+      }
+    });
+
+    function openTracker(orderId) {
+      document.getElementById('trackerOverlay').classList.remove('hidden');
+      document.getElementById('statusOrderId').innerText = `Order ID: #${orderId}`;
+
+      // Connect to WebSocket
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      orderSocket = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
+
+      orderSocket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.event === 'STATUS_CHANGE') {
+          handleStatusUpdate(msg.status, msg.message);
+        }
+      };
+    }
+
+    function handleStatusUpdate(status, message) {
+      document.getElementById('statusMessage').innerText = message;
+
+      if (status === 'paid') {
+        document.getElementById('step2Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
+        document.getElementById('step2Dot').innerText = '✓';
+        document.getElementById('statusIcon').innerText = '🖨️';
+        document.getElementById('statusTitle').innerText = 'পেমেন্ট সম্পন্ন';
+      } else if (status === 'printing') {
+        document.getElementById('step2Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
+        document.getElementById('step2Dot').innerText = '✓';
+        document.getElementById('step3Dot').className = 'w-4 h-4 rounded-full bg-pink-600 text-white flex items-center justify-center text-[10px] pulse-dot';
+        document.getElementById('statusIcon').innerText = '⚡';
+        document.getElementById('statusTitle').innerText = 'প্রিন্ট হচ্ছে...';
+      } else if (status === 'completed') {
+        document.getElementById('step3Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
+        document.getElementById('step3Dot').innerText = '✓';
+        document.getElementById('step4Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
+        document.getElementById('step4Dot').innerText = '✓';
+        document.getElementById('statusIcon').innerText = '🎉';
+        document.getElementById('statusTitle').innerText = 'প্রিন্ট সম্পন্ন!';
+        document.getElementById('trackerActionBtn').classList.remove('hidden');
+      } else if (status === 'cancelled') {
+        document.getElementById('statusIcon').innerText = '❌';
+        document.getElementById('statusTitle').innerText = 'অর্ডার বাতিল';
+        document.getElementById('trackerActionBtn').classList.remove('hidden');
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ড্যাশবোর্ড | {{ shop.name }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style> body { font-family: 'Hind Siliguri', sans-serif; } </style>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen">
+
+  <!-- Top Navbar -->
+  <header class="bg-white border-b sticky top-0 z-40 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <span class="text-3xl">🖨️</span>
+        <div>
+          <h1 class="font-bold text-lg text-gray-900 leading-none">{{ shop.name }}</h1>
+          <span class="text-xs text-gray-500 font-mono">শপ কোড: {{ shop.shop_code }}</span>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <!-- Agent Connection Badge -->
+        <div id="agentBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-800' if is_agent_online else 'bg-red-100 text-red-800' }}">
+          <span id="agentDot" class="w-2.5 h-2.5 rounded-full {{ 'bg-green-500' if is_agent_online else 'bg-red-500' }}"></span>
+          <span id="agentText">{{ "উইন্ডোজ এজেন্ট সংযুক্ত" if is_agent_online else "এজেন্ট অফলাইন" }}</span>
+        </div>
+
+        <a href="{{ customer_url }}" target="_blank" class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-pink-50 border border-pink-200 text-pink-700 hover:bg-pink-100 rounded-lg text-xs font-bold transition">
+          <span>🔗 কাস্টমার পেজ</span>
+        </a>
+
+        <a href="/logout" class="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg font-bold border border-red-200 transition">
+          লগআউট
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- Overview & Action Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Stats 1 -->
+      <div class="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+        <span class="text-xs font-semibold text-gray-500 uppercase">আজকের অর্ডার</span>
+        <div class="text-2xl font-black text-gray-900 mt-1" id="statTodayOrders">{{ stats.today_orders }} টি</div>
+      </div>
+
+      <!-- Stats 2 -->
+      <div class="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+        <span class="text-xs font-semibold text-gray-500 uppercase">আজকের মোট আয়</span>
+        <div class="text-2xl font-black text-green-600 mt-1" id="statTodayRevenue">৳ {{ stats.today_revenue }}</div>
+      </div>
+
+      <!-- Stats 3 -->
+      <div class="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+        <span class="text-xs font-semibold text-gray-500 uppercase">সর্বমোট সম্পন্ন অর্ডার</span>
+        <div class="text-2xl font-black text-gray-900 mt-1">{{ stats.total_orders }} টি</div>
+      </div>
+
+      <!-- Action: QR Standee & Rate settings -->
+      <div class="bg-gradient-to-r from-pink-600 to-orange-500 p-5 rounded-2xl text-white shadow-md flex flex-col justify-between">
+        <div>
+          <h3 class="font-bold text-base">দোকানের প্রিন্ট স্ট্যান্ডি</h3>
+          <p class="text-xs text-pink-100 mt-1">কাউন্টারে কিউআর কোড পোস্টার রাখুন</p>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <a href="/admin/qr-standee" target="_blank" class="px-3 py-1.5 bg-white text-pink-600 rounded-lg text-xs font-bold hover:bg-pink-50 transition">
+            🖨️ পোস্টার প্রিন্ট
+          </a>
+          <button onclick="openSettingsModal()" class="px-3 py-1.5 bg-black/20 hover:bg-black/30 rounded-lg text-xs font-bold transition">
+            ⚙️ রেট সেটিংস
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent Setup Help Banner if Agent is offline -->
+    <div id="agentAlertBanner" class="{{ '' if not is_agent_online else 'hidden' }} p-4 bg-yellow-50 border border-yellow-200 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">⚠️</span>
+        <div>
+          <h4 class="font-bold text-sm text-yellow-900">দোকানের উইন্ডোজ প্রিন্ট এজেন্ট সংযুক্ত নেই!</h4>
+          <p class="text-xs text-yellow-700">স্বয়ংক্রিয় প্রিন্ট পেতে আপনার পিসিতে <code>agent/start_agent.bat</code> ফাইলটি রান করুন।</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500">আপনার API Key:</span>
+        <code class="px-2 py-1 bg-white border border-yellow-300 rounded text-xs font-mono font-bold">{{ shop.api_key }}</code>
+        <button onclick="copyApiKey('{{ shop.api_key }}')" class="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 text-xs font-bold rounded">কপি</button>
+      </div>
+    </div>
+
+    <!-- Real-time Live Orders Feed -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="px-6 py-4 border-b flex items-center justify-between bg-gray-50/50">
+        <div>
+          <h2 class="font-bold text-base text-gray-900">লাইভ প্রিন্ট অর্ডার তালিকা</h2>
+          <p class="text-xs text-gray-500">নতুন অর্ডার আসলে স্বয়ংক্রিয়ভাবে তালিকায় যুক্ত হবে</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-ping"></span>
+          <span class="text-xs font-bold text-gray-500">রিয়েল-টাইম সিঙ্ক সক্রিয়</span>
+        </div>
+      </div>
+
+      <!-- Orders Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-gray-50 text-gray-500 uppercase font-semibold border-b">
+            <tr>
+              <th class="px-6 py-3">অর্ডার আইডি</th>
+              <th class="px-6 py-3">ফাইল</th>
+              <th class="px-6 py-3">বিস্তারিত</th>
+              <th class="px-6 py-3">বিল</th>
+              <th class="px-6 py-3">পেমেন্ট মাধ্যম</th>
+              <th class="px-6 py-3">স্ট্যাটাস</th>
+              <th class="px-6 py-3 text-right">অ্যাকশন</th>
+            </tr>
+          </thead>
+          <tbody id="ordersTableBody" class="divide-y divide-gray-100">
+            {% for o in orders %}
+            <tr id="row-{{ o.id }}" class="hover:bg-gray-50/80 transition">
+              <td class="px-6 py-4 font-mono font-bold text-gray-900">#{{ o.id }}</td>
+              <td class="px-6 py-4">
+                <p class="font-bold text-gray-800 truncate max-w-xs">{{ o.original_filename }}</p>
+                <span class="text-gray-400 text-[11px]">{{ o.file_type | upper }}</span>
+              </td>
+              <td class="px-6 py-4">
+                <span class="font-bold">{{ o.page_count }} পেজ</span> × {{ o.copies }} কপি
+                <div class="text-gray-500 text-[11px]">
+                  {{ "সাদাকালো" if o.color_mode == "bw" else "কালার" }} • 
+                  {{ "এক পিঠ" if o.duplex == "single" else "উভয় পিঠ" }} • 
+                  {{ o.paper_size }}
+                </div>
+              </td>
+              <td class="px-6 py-4 font-bold text-sm text-gray-900">৳{{ o.total_price }}</td>
+              <td class="px-6 py-4">
+                {% if o.payment_method == "counter_cash" %}
+                  <span class="px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold">💵 কাউন্টার ক্যাশ</span>
+                {% else %}
+                  <span class="px-2 py-1 rounded bg-pink-50 text-pink-800 border border-pink-200 font-bold">
+                    {{ o.payment_method | upper }}
+                  </span>
+                  {% if o.trx_id %}
+                    <p class="text-[10px] text-gray-500 font-mono mt-0.5">Trx: {{ o.trx_id }}</p>
+                  {% endif %}
+                {% endif %}
+              </td>
+              <td class="px-6 py-4">
+                {% if o.status == "pending_payment" %}
+                  <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-yellow-100 text-yellow-800">পেমেন্ট অপেক্ষমাণ</span>
+                {% elif o.status == "paid" %}
+                  <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800">পেইড / প্রস্তুত</span>
+                {% elif o.status == "printing" %}
+                  <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 animate-pulse">প্রিন্ট হচ্ছে...</span>
+                {% elif o.status == "completed" %}
+                  <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-green-100 text-green-800">✓ সম্পন্ন</span>
+                {% else %}
+                  <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-100 text-gray-800">বাতিল</span>
+                {% endif %}
+              </td>
+              <td class="px-6 py-4 text-right space-x-1">
+                {% if o.status in ["pending_payment", "paid"] %}
+                  <button onclick="approveOrder('{{ o.id }}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
+                    প্রিন্ট অনুমোদন
+                  </button>
+                  <button onclick="cancelOrder('{{ o.id }}')" class="px-2 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded font-bold text-xs transition">
+                    বাতিল
+                  </button>
+                {% else %}
+                  <span class="text-gray-400 font-semibold text-[11px]">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr id="emptyRow">
+              <td colspan="7" class="px-6 py-10 text-center text-gray-400">
+                বর্তমানে কোনো প্রিন্ট অর্ডার নেই। কাস্টমার QR স্ক্যান করলে এখানে লাইভ দেখা যাবে।
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Rate & Settings Modal -->
+  <div id="settingsModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white max-w-lg w-full rounded-2xl p-6 shadow-2xl border border-gray-100 space-y-4 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 class="font-bold text-lg text-gray-900">দোকানের রেট ও পেমেন্ট সেটিংস</h3>
+        <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-700 text-xl font-bold">&times;</button>
+      </div>
+
+      <form action="/admin/settings" method="POST" class="space-y-4 text-xs">
+        <div>
+          <label class="block font-bold text-gray-700 mb-1">দোকানের নাম</label>
+          <input type="text" name="name" value="{{ shop.name }}" required class="w-full px-3 py-2 border rounded-lg">
+        </div>
+        <div>
+          <label class="block font-bold text-gray-700 mb-1">মালিকের নাম</label>
+          <input type="text" name="owner_name" value="{{ shop.owner_name }}" required class="w-full px-3 py-2 border rounded-lg">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 pt-2 border-t">
+          <div>
+            <label class="block font-bold text-gray-700 mb-1">বিকাশ পার্সোনাল/মার্চেন্ট নম্বর</label>
+            <input type="text" name="bkash_number" value="{{ shop.bkash_number }}" class="w-full px-3 py-2 border rounded-lg">
+          </div>
+          <div>
+            <label class="block font-bold text-gray-700 mb-1">নগদ নম্বর</label>
+            <input type="text" name="nagad_number" value="{{ shop.nagad_number }}" class="w-full px-3 py-2 border rounded-lg">
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" name="allow_counter_cash" value="1" {{ 'checked' if shop.allow_counter_cash else '' }} class="w-4 h-4 text-pink-600 rounded">
+            <span class="font-bold text-gray-700">কাউন্টারে ক্যাশ পেমেন্ট চালু রাখুন</span>
+          </label>
+        </div>
+
+        <!-- Price Cards -->
+        <div class="pt-2 border-t space-y-2">
+          <p class="font-bold text-gray-800 text-sm">প্রিন্ট রেট চার্ট (টাকায়):</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <span class="text-gray-500">সাদাকালো (এক পিঠ) ৳:</span>
+              <input type="number" step="0.5" name="rate_bw_single" value="{{ shop.rate_bw_single }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+            <div>
+              <span class="text-gray-500">সাদাকালো (উভয় পিঠ) ৳:</span>
+              <input type="number" step="0.5" name="rate_bw_double" value="{{ shop.rate_bw_double }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+            <div>
+              <span class="text-gray-500">কালার (এক পিঠ) ৳:</span>
+              <input type="number" step="0.5" name="rate_color_single" value="{{ shop.rate_color_single }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+            <div>
+              <span class="text-gray-500">কালার (উভয় পিঠ) ৳:</span>
+              <input type="number" step="0.5" name="rate_color_double" value="{{ shop.rate_color_double }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+            <div class="col-span-2">
+              <span class="text-gray-500">৪×৬ পাসপোর্ট শিট (৬ কপি ফটো) ৳:</span>
+              <input type="number" step="1" name="rate_photo_4x6" value="{{ shop.rate_photo_4x6 }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t flex justify-end gap-2">
+          <button type="button" onclick="closeSettingsModal()" class="px-4 py-2 border rounded-lg font-bold text-gray-600">বাতিল</button>
+          <button type="submit" class="px-5 py-2 bg-pink-600 text-white font-bold rounded-lg hover:bg-pink-700">সংরক্ষণ করুন</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const SHOP_ID = {{ shop.id }};
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const adminSocket = new WebSocket(`${proto}//${location.host}/ws/admin/${SHOP_ID}`);
+
+    // Simple Audio Chime using Web Audio API (no external file needed!)
+    function playChime() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.6);
+      } catch (e) {
+        console.log("Audio play error", e);
+      }
+    }
+
+    adminSocket.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      console.log("[WS Event]", msg);
+
+      if (msg.event === 'NEW_ORDER') {
+        playChime();
+        addNewOrderRow(msg.order);
+      } else if (msg.event === 'ORDER_UPDATED' || msg.event === 'PAYMENT_SUBMITTED') {
+        location.reload();
+      } else if (msg.event === 'AGENT_STATUS') {
+        updateAgentUI(msg.online);
+      }
+    };
+
+    function updateAgentUI(isOnline) {
+      const badge = document.getElementById('agentBadge');
+      const dot = document.getElementById('agentDot');
+      const text = document.getElementById('agentText');
+      const banner = document.getElementById('agentAlertBanner');
+
+      if (isOnline) {
+        badge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold bg-green-100 text-green-800';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500';
+        text.innerText = 'উইন্ডোজ এজেন্ট সংযুক্ত';
+        banner.classList.add('hidden');
+      } else {
+        badge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold bg-red-100 text-red-800';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+        text.innerText = 'এজেন্ট অফলাইন';
+        banner.classList.remove('hidden');
+      }
+    }
+
+    function addNewOrderRow(o) {
+      const emptyRow = document.getElementById('emptyRow');
+      if (emptyRow) emptyRow.remove();
+
+      const tbody = document.getElementById('ordersTableBody');
+      const tr = document.createElement('tr');
+      tr.id = `row-${o.id}`;
+      tr.className = 'bg-yellow-50/70 hover:bg-gray-50 transition animate-pulse';
+
+      tr.innerHTML = `
+        <td class="px-6 py-4 font-mono font-bold text-gray-900">#${o.id}</td>
+        <td class="px-6 py-4">
+          <p class="font-bold text-gray-800 truncate max-w-xs">${o.original_filename}</p>
+          <span class="text-gray-400 text-[11px]">${o.file_type.toUpperCase()}</span>
+        </td>
+        <td class="px-6 py-4">
+          <span class="font-bold">${o.page_count} পেজ</span> × ${o.copies} কপি
+          <div class="text-gray-500 text-[11px]">
+            ${o.color_mode === 'bw' ? 'সাদাকালো' : 'কালার'} • 
+            ${o.duplex === 'single' ? 'এক পিঠ' : 'উভয় পিঠ'} • 
+            ${o.paper_size}
+          </div>
+        </td>
+        <td class="px-6 py-4 font-bold text-sm text-gray-900">৳${o.total_price}</td>
+        <td class="px-6 py-4">
+          <span class="px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold">${o.payment_method.toUpperCase()}</span>
+        </td>
+        <td class="px-6 py-4">
+          <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-yellow-100 text-yellow-800">পেমেন্ট অপেক্ষমাণ</span>
+        </td>
+        <td class="px-6 py-4 text-right space-x-1">
+          <button onclick="approveOrder('${o.id}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
+            প্রিন্ট অনুমোদন
+          </button>
+          <button onclick="cancelOrder('${o.id}')" class="px-2 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded font-bold text-xs transition">
+            বাতিল
+          </button>
+        </td>
+      `;
+      tbody.prepend(tr);
+    }
+
+    async function approveOrder(orderId) {
+      if (!confirm('আপনি কি এই অর্ডারটি প্রিন্ট করার অনুমোদন দিতে চান?')) return;
+      try {
+        const res = await fetch(`/admin/order/${orderId}/approve`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          location.reload();
+        }
+      } catch (e) {
+        alert('ত্রুটি ঘটেছে। আবার চেষ্টা করুন।');
+      }
+    }
+
+    async function cancelOrder(orderId) {
+      if (!confirm('অর্ডারটি বাতিল করতে চান?')) return;
+      try {
+        const res = await fetch(`/admin/order/${orderId}/cancel`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          location.reload();
+        }
+      } catch (e) {
+        alert('ত্রুটি ঘটেছে। আবার চেষ্টা করুন।');
+      }
+    }
+
+    function openSettingsModal() { document.getElementById('settingsModal').classList.remove('hidden'); }
+    function closeSettingsModal() { document.getElementById('settingsModal').classList.add('hidden'); }
+    function copyApiKey(key) {
+      navigator.clipboard.writeText(key);
+      alert('API Key কপি করা হয়েছে!');
+    }
+  </script>
+</body>
+</html>
