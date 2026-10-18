@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 > nul
 title QR Se Print - Windows Print Agent
 color 0A
 cd /d "%~dp0agent"
@@ -12,4 +13,3 @@ echo ======================================================
 echo Agent stopped. Press any key to close this window.
 echo ======================================================
 pause
-
