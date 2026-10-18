@@ -30,28 +30,63 @@
 
   <main class="max-w-lg mx-auto px-4 py-4 space-y-4">
 
+    <!-- Print Mode Switcher (Normal Document vs NID Card) -->
+    <div class="bg-white p-1.5 rounded-2xl border border-gray-200 shadow-sm flex gap-1">
+      <button type="button" id="tabDocMode" class="flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow">
+        📄 সাধারণ ডকুমেন্ট / ফটো
+      </button>
+      <button type="button" id="tabNidMode" class="flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900">
+        🪪 NID কার্ড (২ পিঠ একসাথে)
+      </button>
+    </div>
+
     <!-- Step 1: Upload Box -->
     <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm" id="uploadCard">
       <div class="flex items-center justify-between mb-3">
         <h2 class="font-bold text-gray-800 text-base flex items-center gap-1.5">
           <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">1</span>
-          ডকুমেন্ট বা ছবি সিলেক্ট করুন
+          <span id="step1Title">ডকুমেন্ট বা ছবি সিলেক্ট করুন</span>
         </h2>
         <a href="/resume" class="text-xs text-pink-600 font-bold hover:underline">📝 রেজুমে তৈরি?</a>
       </div>
 
-      <!-- Dropzone -->
-      <div id="dropzone" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-6 text-center cursor-pointer transition bg-gray-50 hover:bg-pink-50/20">
+      <!-- Normal Dropzone -->
+      <div id="dropzoneNormal" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-6 text-center cursor-pointer transition bg-gray-50 hover:bg-pink-50/20">
         <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/webp" class="hidden">
         <div class="text-3xl mb-1">📄</div>
         <p class="font-bold text-gray-700 text-sm">ফাইল ড্রপ করুন অথবা ক্লিক করুন</p>
         <p class="text-xs text-gray-400 mt-1">PDF, JPG, PNG (সর্বোচ্চ ৫০ MB)</p>
       </div>
 
+      <!-- NID 2-Image Upload Box (Shown when NID tab active) -->
+      <div id="dropzoneNid" class="hidden space-y-3">
+        <div class="grid grid-cols-2 gap-3 text-center">
+          <!-- Front Side -->
+          <div id="nidFrontBox" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-4 bg-gray-50 hover:bg-pink-50/20 cursor-pointer">
+            <input type="file" id="nidFrontInput" accept="image/*" class="hidden">
+            <div class="text-2xl mb-1">🪪</div>
+            <p class="font-bold text-xs text-gray-800">১. সামনের পিঠ</p>
+            <span class="text-[10px] text-gray-400" id="nidFrontLabel">ছবি তুলুন/বাছুন</span>
+          </div>
+
+          <!-- Back Side -->
+          <div id="nidBackBox" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-4 bg-gray-50 hover:bg-pink-50/20 cursor-pointer">
+            <input type="file" id="nidBackInput" accept="image/*" class="hidden">
+            <div class="text-2xl mb-1">🔄</div>
+            <p class="font-bold text-xs text-gray-800">২. পেছনের পিঠ</p>
+            <span class="text-[10px] text-gray-400" id="nidBackLabel">ছবি তুলুন/বাছুন</span>
+          </div>
+        </div>
+
+        <button type="button" id="btnMergeNid" disabled class="w-full py-2.5 bg-gray-200 text-gray-500 font-bold text-xs rounded-xl transition cursor-not-allowed">
+          দুটো ছবি সিলেক্ট করে NID শিট তৈরি করুন
+        </button>
+      </div>
+
       <!-- Uploading state -->
       <div id="uploadProgress" class="hidden mt-3 space-y-1">
         <div class="flex justify-between text-xs text-gray-500">
-          <span>ফাইল আপলোড ও পেজ প্রসেসিং হচ্ছে...</span>
+          <span id="progressLabel">ফাইল আপলোড ও প্রসেসিং হচ্ছে...</span>
           <span id="progressPercent">0%</span>
         </div>
         <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
@@ -65,7 +100,7 @@
           <span class="text-2xl" id="fileIcon">📄</span>
           <div class="truncate">
             <p class="font-bold text-gray-800 text-sm truncate" id="fileNameText">document.pdf</p>
-            <p class="text-xs text-pink-600 font-semibold" id="fileMetaText">পেজ সংখ্যা: ১</p>
+            <p class="text-xs text-pink-600 font-semibold" id="fileMetaText">মোট পেজ: ১</p>
           </div>
         </div>
         <button id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg">&times;</button>
@@ -79,18 +114,43 @@
         প্রিন্ট অপশন ঠিক করুন
       </h2>
 
-      <!-- Paper Size / Mode -->
       <div class="space-y-3">
-        <div>
+        <!-- Paper Size / Mode (Document vs Photo) -->
+        <div id="paperTypeWrapper">
           <label class="block text-xs font-semibold text-gray-600 mb-1">প্রিন্টের ধরন</label>
           <div class="grid grid-cols-2 gap-2">
             <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optDocA4">
               <input type="radio" name="paper_size" value="A4" checked class="hidden">
-              <span class="text-sm font-bold">📄 সাধারণ A4 ডকুমেন্ট</span>
+              <span class="text-sm font-bold">📄 সাধারণ A4 পেপার</span>
             </label>
             <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-gray-200 text-gray-700" id="optPhoto">
               <input type="radio" name="paper_size" value="4x6" class="hidden">
               <span class="text-sm font-bold">📷 ৪×৬ পাসপোর্ট শিট</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- NEW: Multiple Pages Per Sheet (N-up for PDF) -->
+        <div id="nupWrapper">
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs font-semibold text-gray-600">এক শিটে একাধিক পাতা (N-up)</label>
+            <span class="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-bold">কাগজ ও খরচ সাশ্রয়ী</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="border-2 rounded-xl p-2 text-center cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optNup1">
+              <input type="radio" name="pages_per_sheet" value="1" checked class="hidden">
+              <p class="text-xs font-bold">১ পাতা / শিট</p>
+              <span class="text-[10px] text-gray-500">স্বাভাবিক</span>
+            </label>
+            <label class="border-2 rounded-xl p-2 text-center cursor-pointer border-gray-200 text-gray-700" id="optNup2">
+              <input type="radio" name="pages_per_sheet" value="2" class="hidden">
+              <p class="text-xs font-bold">২ পাতা / শিট</p>
+              <span class="text-[10px] text-green-600 font-bold">অর্ধেক খরচ!</span>
+            </label>
+            <label class="border-2 rounded-xl p-2 text-center cursor-pointer border-gray-200 text-gray-700" id="optNup4">
+              <input type="radio" name="pages_per_sheet" value="4" class="hidden">
+              <p class="text-xs font-bold">৪ পাতা / শিট</p>
+              <span class="text-[10px] text-green-600 font-bold">১/৪ খরচ!</span>
             </label>
           </div>
         </div>
@@ -161,7 +221,7 @@
       <div class="bg-gradient-to-r from-pink-50 to-orange-50 border border-pink-200 rounded-xl p-3.5 mb-4 flex items-center justify-between">
         <div>
           <span class="text-xs font-semibold text-gray-500 uppercase">সর্বমোট বিল</span>
-          <p class="text-xs text-gray-400" id="billSummaryText">১ পেজ × ১ কপি</p>
+          <p class="text-xs text-gray-500 font-semibold" id="billSummaryText">১ পেজ × ১ কপি</p>
         </div>
         <div class="text-right">
           <span class="text-2xl font-black text-pink-600" id="totalPriceText">৳ 0</span>
@@ -211,21 +271,19 @@
           </div>
         </div>
 
-        <!-- Customer Name/Phone (optional) -->
         <div class="pt-2">
           <input type="text" id="custNameInput" placeholder="আপনার নাম (ঐচ্ছিক)" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
         </div>
 
-        <!-- Confirm Print Button -->
         <button type="button" id="btnConfirmOrder" class="w-full py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition flex items-center justify-center gap-2 text-base">
           <span>🖨️ প্রিন্ট অর্ডার নিশ্চিত করুন</span>
         </button>
       </div>
     </div>
 
-    <!-- Live Order Tracker Modal / Fullscreen Overlay -->
+    <!-- Live Order Tracker Modal -->
     <div id="trackerOverlay" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-      <div class="bg-white max-w-sm w-full rounded-2xl p-6 text-center shadow-2xl space-y-5 animate-fade-in">
+      <div class="bg-white max-w-sm w-full rounded-2xl p-6 text-center shadow-2xl space-y-5">
         <div class="w-16 h-16 mx-auto rounded-full bg-pink-50 border border-pink-200 flex items-center justify-center text-3xl" id="statusIcon">
           ⏳
         </div>
@@ -238,7 +296,6 @@
           কাউন্টার থেকে পেমেন্ট নিশ্চিত করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন...
         </p>
 
-        <!-- Live Step Animation -->
         <div class="space-y-2 text-left text-xs text-gray-600">
           <div class="flex items-center gap-2" id="step1">
             <span class="w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]">✓</span>
@@ -269,9 +326,7 @@
   </main>
 
   <script>
-    // Rates & Shop data injected from backend
     const SHOP_ID = {{ shop.id }};
-    const SHOP_CODE = "{{ shop.shop_code }}";
     const BKASH_NUM = "{{ shop.bkash_number }}";
     const NAGAD_NUM = "{{ shop.nagad_number }}";
     const RATES = {
@@ -282,12 +337,31 @@
       photo_4x6: {{ shop.rate_photo_4x6 }}
     };
 
-    let uploadedFile = null; // { file_id, original_filename, file_type, page_count }
-    let activeOrderId = null;
-    let orderSocket = null;
+    let currentMode = 'document'; // 'document' or 'nid'
+    let uploadedFile = null;
+    let nidFrontFile = null;
+    let nidBackFile = null;
 
-    // Elements
-    const dropzone = document.getElementById('dropzone');
+    // Mode Switcher Elements
+    const tabDocMode = document.getElementById('tabDocMode');
+    const tabNidMode = document.getElementById('tabNidMode');
+    const dropzoneNormal = document.getElementById('dropzoneNormal');
+    const dropzoneNid = document.getElementById('dropzoneNid');
+    const nupWrapper = document.getElementById('nupWrapper');
+    const paperTypeWrapper = document.getElementById('paperTypeWrapper');
+    const duplexWrapper = document.getElementById('duplexWrapper');
+    const step1Title = document.getElementById('step1Title');
+
+    // NID Elements
+    const nidFrontBox = document.getElementById('nidFrontBox');
+    const nidBackBox = document.getElementById('nidBackBox');
+    const nidFrontInput = document.getElementById('nidFrontInput');
+    const nidBackInput = document.getElementById('nidBackInput');
+    const nidFrontLabel = document.getElementById('nidFrontLabel');
+    const nidBackLabel = document.getElementById('nidBackLabel');
+    const btnMergeNid = document.getElementById('btnMergeNid');
+
+    // Normal Elements
     const fileInput = document.getElementById('fileInput');
     const uploadProgress = document.getElementById('uploadProgress');
     const progressBar = document.getElementById('progressBar');
@@ -306,28 +380,129 @@
     const totalPriceText = document.getElementById('totalPriceText');
     const billSummaryText = document.getElementById('billSummaryText');
 
-    // MFS Details
     const mfsDetailsBox = document.getElementById('mfsDetailsBox');
     const mfsInstruction = document.getElementById('mfsInstruction');
     const mfsNumber = document.getElementById('mfsNumber');
 
-    // File selection trigger
-    dropzone.addEventListener('click', () => fileInput.click());
+    // Mode switching handler
+    tabDocMode.addEventListener('click', () => {
+      currentMode = 'document';
+      tabDocMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow';
+      tabNidMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900';
+      dropzoneNormal.classList.remove('hidden');
+      dropzoneNid.classList.add('hidden');
+      step1Title.innerText = 'ডকুমেন্ট বা ছবি সিলেক্ট করুন';
+      paperTypeWrapper.classList.remove('hidden');
+      nupWrapper.classList.remove('hidden');
+      duplexWrapper.classList.remove('hidden');
+      resetUploads();
+    });
+
+    tabNidMode.addEventListener('click', () => {
+      currentMode = 'nid';
+      tabNidMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow';
+      tabDocMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900';
+      dropzoneNormal.classList.add('hidden');
+      dropzoneNid.classList.remove('hidden');
+      step1Title.innerText = 'NID কার্ডের ২ পিঠের ছবি দিন';
+      paperTypeWrapper.classList.add('hidden');
+      nupWrapper.classList.add('hidden');
+      duplexWrapper.classList.add('hidden');
+      resetUploads();
+    });
+
+    function resetUploads() {
+      uploadedFile = null;
+      nidFrontFile = null;
+      nidBackFile = null;
+      nidFrontLabel.innerText = 'ছবি তুলুন/বাছুন';
+      nidBackLabel.innerText = 'ছবি তুলুন/বাছুন';
+      btnMergeNid.disabled = true;
+      btnMergeNid.className = 'w-full py-2.5 bg-gray-200 text-gray-500 font-bold text-xs rounded-xl transition cursor-not-allowed';
+      fileInfoBadge.classList.add('hidden');
+      settingsCard.classList.add('opacity-60', 'pointer-events-none');
+      paymentCard.classList.add('opacity-60', 'pointer-events-none');
+      totalPriceText.innerText = '৳ 0';
+    }
+
+    // NID Uploads
+    nidFrontBox.addEventListener('click', () => nidFrontInput.click());
+    nidBackBox.addEventListener('click', () => nidBackInput.click());
+
+    nidFrontInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        nidFrontFile = e.target.files[0];
+        nidFrontLabel.innerText = '✓ ' + nidFrontFile.name.substring(0, 12) + '...';
+        checkNidReady();
+      }
+    });
+
+    nidBackInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        nidBackFile = e.target.files[0];
+        nidBackLabel.innerText = '✓ ' + nidBackFile.name.substring(0, 12) + '...';
+        checkNidReady();
+      }
+    });
+
+    function checkNidReady() {
+      if (nidFrontFile && nidBackFile) {
+        btnMergeNid.disabled = false;
+        btnMergeNid.className = 'w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold text-xs rounded-xl transition shadow cursor-pointer';
+        btnMergeNid.innerText = '✨ NID সামনের ও পেছনের ছবি একসাথে প্রসেস করুন';
+      }
+    }
+
+    btnMergeNid.addEventListener('click', async () => {
+      if (!nidFrontFile || !nidBackFile) return;
+
+      dropzoneNid.classList.add('hidden');
+      uploadProgress.classList.remove('hidden');
+
+      const formData = new FormData();
+      formData.append('front', nidFrontFile);
+      formData.append('back', nidBackFile);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload-nid', true);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const p = Math.round((e.loaded / e.total) * 100);
+          progressBar.style.width = p + '%';
+          progressPercent.innerText = p + '%';
+        }
+      };
+
+      xhr.onload = () => {
+        uploadProgress.classList.add('hidden');
+        if (xhr.status === 200) {
+          uploadedFile = JSON.parse(xhr.responseText);
+          showUploadedFile();
+        } else {
+          alert('NID ছবি প্রসেসিং ব্যর্থ হয়েছে।');
+          dropzoneNid.classList.remove('hidden');
+        }
+      };
+      xhr.send(formData);
+    });
+
+    // Normal File Upload
+    dropzoneNormal.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
     });
 
-    // Drag and Drop
-    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('border-pink-500'); });
-    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('border-pink-500'));
-    dropzone.addEventListener('drop', (e) => {
+    dropzoneNormal.addEventListener('dragover', (e) => { e.preventDefault(); dropzoneNormal.classList.add('border-pink-500'); });
+    dropzoneNormal.addEventListener('dragleave', () => dropzoneNormal.classList.remove('border-pink-500'));
+    dropzoneNormal.addEventListener('drop', (e) => {
       e.preventDefault();
-      dropzone.classList.remove('border-pink-500');
+      dropzoneNormal.classList.remove('border-pink-500');
       if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
     });
 
     async function handleFileUpload(file) {
-      dropzone.classList.add('hidden');
+      dropzoneNormal.classList.add('hidden');
       uploadProgress.classList.remove('hidden');
 
       const formData = new FormData();
@@ -350,26 +525,24 @@
           uploadedFile = JSON.parse(xhr.responseText);
           showUploadedFile();
         } else {
-          alert('ফাইল আপলোড ব্যর্থ হয়েছে। আবার চেষ্টা করুন।');
-          dropzone.classList.remove('hidden');
+          alert('ফাইল আপলোড ব্যর্থ হয়েছে।');
+          dropzoneNormal.classList.remove('hidden');
         }
       };
-
-      xhr.onerror = () => {
-        uploadProgress.classList.add('hidden');
-        dropzone.classList.remove('hidden');
-        alert('ইন্টারনেট সংযোগ সমস্যা।');
-      };
-
       xhr.send(formData);
     }
 
     function showUploadedFile() {
       fileNameText.innerText = uploadedFile.original_filename;
-      fileMetaText.innerText = `মোট পেজ: ${uploadedFile.page_count} টি`;
+      fileMetaText.innerText = uploadedFile.is_nid ? 'NID কার্ড (A4 পেজে সামনে ও পেছনে সাজানো)' : `মোট পেজ: ${uploadedFile.page_count} টি`;
       fileInfoBadge.classList.remove('hidden');
 
-      // Unlock settings & payment
+      if (uploadedFile.file_type !== 'pdf' || uploadedFile.is_nid) {
+        nupWrapper.classList.add('hidden');
+      } else {
+        nupWrapper.classList.remove('hidden');
+      }
+
       settingsCard.classList.remove('opacity-60', 'pointer-events-none');
       paymentCard.classList.remove('opacity-60', 'pointer-events-none');
 
@@ -377,16 +550,15 @@
     }
 
     btnRemoveFile.addEventListener('click', () => {
-      uploadedFile = null;
-      fileInput.value = '';
-      fileInfoBadge.classList.add('hidden');
-      dropzone.classList.remove('hidden');
-      settingsCard.classList.add('opacity-60', 'pointer-events-none');
-      paymentCard.classList.add('opacity-60', 'pointer-events-none');
-      totalPriceText.innerText = '৳ 0';
+      resetUploads();
+      if (currentMode === 'nid') {
+        dropzoneNid.classList.remove('hidden');
+      } else {
+        dropzoneNormal.classList.remove('hidden');
+      }
     });
 
-    // Option selections styling & calculation
+    // Radio button handlers
     function setupRadioGroup(groupIds, onChange) {
       groupIds.forEach(id => {
         const el = document.getElementById(id);
@@ -411,13 +583,14 @@
       const isPhoto = document.querySelector('input[name="paper_size"]:checked').value === '4x6';
       document.getElementById('colorModeWrapper').style.display = isPhoto ? 'none' : 'block';
       document.getElementById('duplexWrapper').style.display = isPhoto ? 'none' : 'block';
+      document.getElementById('nupWrapper').style.display = isPhoto ? 'none' : 'block';
       calculateBill();
     });
 
+    setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], calculateBill);
     setupRadioGroup(['optBw', 'optColor'], calculateBill);
     setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
 
-    // Payment methods
     setupRadioGroup(['payMethodCash', 'payMethodBkash', 'payMethodNagad'], () => {
       const method = document.querySelector('input[name="payment_method"]:checked').value;
       if (method === 'bkash') {
@@ -445,25 +618,36 @@
     function calculateBill() {
       if (!uploadedFile) return;
 
-      const paperSize = document.querySelector('input[name="paper_size"]:checked').value;
       const copies = parseInt(inputCopies.value);
-      const pages = uploadedFile.page_count;
-
+      const color = document.querySelector('input[name="color_mode"]:checked').value;
       let total = 0;
-      if (paperSize === '4x6') {
-        total = RATES.photo_4x6 * copies;
-        billSummaryText.innerText = `৪×৬ পাসপোর্ট শিট × ${copies} কপি`;
+
+      if (uploadedFile.is_nid || currentMode === 'nid') {
+        const rate = color === 'bw' ? RATES.bw_single : RATES.color_single;
+        total = rate * copies;
+        billSummaryText.innerText = `NID কার্ড (${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} সেট`;
       } else {
-        const color = document.querySelector('input[name="color_mode"]:checked').value;
-        const duplex = document.querySelector('input[name="duplex"]:checked').value;
-        let rate = 0;
-        if (color === 'bw') {
-          rate = duplex === 'double' ? RATES.bw_double : RATES.bw_single;
+        const paperSize = document.querySelector('input[name="paper_size"]:checked').value;
+        if (paperSize === '4x6') {
+          total = RATES.photo_4x6 * copies;
+          billSummaryText.innerText = `৪×৬ পাসপোর্ট শিট × ${copies} কপি`;
         } else {
-          rate = duplex === 'double' ? RATES.color_double : RATES.color_single;
+          const duplex = document.querySelector('input[name="duplex"]:checked').value;
+          const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
+          const nup = nupEl ? parseInt(nupEl.value) : 1;
+
+          // Effective sheet calculation with N-up
+          const effectiveSheets = Math.ceil(uploadedFile.page_count / nup);
+
+          let rate = 0;
+          if (color === 'bw') {
+            rate = duplex === 'double' ? RATES.bw_double : RATES.bw_single;
+          } else {
+            rate = duplex === 'double' ? RATES.color_double : RATES.color_single;
+          }
+          total = rate * effectiveSheets * copies;
+          billSummaryText.innerText = `${effectiveSheets} টি শিট (${nup > 1 ? nup + '-in-1' : 'স্বাভাবিক'}, ${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} কপি`;
         }
-        total = rate * pages * copies;
-        billSummaryText.innerText = `${pages} পেজ (${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} কপি`;
       }
 
       totalPriceText.innerText = `৳ ${total.toFixed(2)}`;
@@ -477,7 +661,7 @@
     // Place Order
     document.getElementById('btnConfirmOrder').addEventListener('click', async () => {
       if (!uploadedFile) {
-        alert('অনুগ্রহ করে ফাইল আপলোড করুন।');
+        alert('অনুগ্রহ করে ফাইল বা ছবি আপলোড করুন।');
         return;
       }
 
@@ -489,6 +673,10 @@
         return;
       }
 
+      const isNid = uploadedFile.is_nid || currentMode === 'nid';
+      const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
+      const nup = (!isNid && nupEl) ? parseInt(nupEl.value) : 1;
+
       const orderPayload = {
         shop_id: SHOP_ID,
         file_id: uploadedFile.file_id,
@@ -496,9 +684,10 @@
         file_type: uploadedFile.file_type,
         page_count: uploadedFile.page_count,
         copies: parseInt(inputCopies.value),
-        paper_size: document.querySelector('input[name="paper_size"]:checked').value,
+        paper_size: isNid ? 'NID' : document.querySelector('input[name="paper_size"]:checked').value,
         color_mode: document.querySelector('input[name="color_mode"]:checked').value,
-        duplex: document.querySelector('input[name="duplex"]:checked').value,
+        duplex: isNid ? 'single' : document.querySelector('input[name="duplex"]:checked').value,
+        pages_per_sheet: nup,
         payment_method: paymentMethod,
         trx_id: trxId,
         customer_name: document.getElementById('custNameInput').value.trim() || 'Walk-in'
@@ -512,8 +701,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          activeOrderId = data.order_id;
-          openTracker(activeOrderId);
+          openTracker(data.order_id);
         } else {
           alert('অর্ডার তৈরিতে সমস্যা হয়েছে।');
         }
@@ -526,9 +714,8 @@
       document.getElementById('trackerOverlay').classList.remove('hidden');
       document.getElementById('statusOrderId').innerText = `Order ID: #${orderId}`;
 
-      // Connect to WebSocket
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      orderSocket = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
+      const orderSocket = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
 
       orderSocket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
@@ -569,4 +756,3 @@
   </script>
 </body>
 </html>
-

@@ -376,6 +376,38 @@ async def upload_file(file: UploadFile = File(...)):
         "file_size": len(content)
     }
 
+@app.post("/api/upload-nid")
+async def upload_nid_card(front: UploadFile = File(...), back: UploadFile = File(...)):
+    """Uploads Front and Back of NID card and combines them onto a single A4 sheet with cutting guidelines."""
+    front_ext = front.filename.split(".")[-1].lower() if "." in front.filename else "jpg"
+    back_ext = back.filename.split(".")[-1].lower() if "." in back.filename else "jpg"
+    
+    front_id = f"nid_f_{uuid.uuid4().hex[:8]}.{front_ext}"
+    back_id = f"nid_b_{uuid.uuid4().hex[:8]}.{back_ext}"
+    front_path = os.path.join(UPLOAD_DIR, front_id)
+    back_path = os.path.join(UPLOAD_DIR, back_id)
+    
+    with open(front_path, "wb") as f:
+        f.write(await front.read())
+    with open(back_path, "wb") as f:
+        f.write(await back.read())
+        
+    combined_id = f"nid_sheet_{uuid.uuid4().hex[:8]}.jpg"
+    combined_path = os.path.join(UPLOAD_DIR, combined_id)
+    
+    utils.create_nid_card_sheet(front_path, back_path, combined_path, layout="vertical")
+    
+    utils.secure_delete_file(front_path)
+    utils.secure_delete_file(back_path)
+    
+    return {
+        "file_id": combined_id,
+        "original_filename": "NID_Card_Front_Back.jpg",
+        "file_type": "image",
+        "page_count": 1,
+        "is_nid": True
+    }
+
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
     data = await request.json()
@@ -390,12 +422,21 @@ async def customer_create_order(request: Request):
         
     order_id = f"QSP-{secrets.token_hex(3).upper()}"
     
-    # Calculate price based on shop rates
     copies = int(data.get("copies", 1))
     page_count = int(data.get("page_count", 1))
     color_mode = data.get("color_mode", "bw") # "bw" or "color"
     duplex = data.get("duplex", "single")     # "single" or "double"
-    paper_size = data.get("paper_size", "A4") # "A4" or "4x6"
+    paper_size = data.get("paper_size", "A4") # "A4", "4x6", or "NID"
+    pages_per_sheet = int(data.get("pages_per_sheet", 1)) # 1, 2, or 4
+    
+    # Handle N-up multi-page per sheet (2-in-1, 4-in-1) for PDFs
+    if pages_per_sheet in [2, 4] and data.get("file_type") == "pdf":
+        nup_file_id = f"nup{pages_per_sheet}_{file_id}"
+        nup_path = os.path.join(UPLOAD_DIR, nup_file_id)
+        nup_path, new_sheet_count = utils.create_nup_pdf(file_path, nup_path, nup=pages_per_sheet)
+        utils.secure_delete_file(file_path)
+        file_path = nup_path
+        page_count = new_sheet_count
     
     if paper_size == "4x6":
         # 4x6 Photo Passport Sheet
@@ -408,6 +449,10 @@ async def customer_create_order(request: Request):
             utils.create_4x6_passport_sheet(file_path, sheet_path, count=6)
             utils.secure_delete_file(file_path)
             file_path = sheet_path
+    elif paper_size == "NID":
+        # NID Card sheet on A4
+        rate = shop["rate_color_single"] if color_mode == "color" else shop["rate_bw_single"]
+        total_price = rate * copies
     else:
         if color_mode == "bw":
             rate = shop["rate_bw_double"] if duplex == "double" else shop["rate_bw_single"]
