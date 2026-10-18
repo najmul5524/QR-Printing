@@ -95,24 +95,34 @@
       </div>
 
       <!-- Uploaded File Badge -->
-      <div id="fileInfoBadge" class="hidden mt-3 p-3 bg-pink-50 border border-pink-200 rounded-xl flex items-center justify-between">
-        <div class="flex items-center gap-2 overflow-hidden">
+      <div id="fileInfoBadge" class="hidden mt-3 p-3 bg-pink-50 border border-pink-200 rounded-xl flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2 overflow-hidden flex-1">
           <span class="text-2xl" id="fileIcon">📄</span>
           <div class="truncate">
             <p class="font-bold text-gray-800 text-sm truncate" id="fileNameText">document.pdf</p>
             <p class="text-xs text-pink-600 font-semibold" id="fileMetaText">মোট পেজ: ১</p>
           </div>
         </div>
-        <button id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg">&times;</button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button type="button" id="btnOpenPreview" class="px-2.5 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition">
+            <span>👁️</span> <span>প্রিভিউ</span>
+          </button>
+          <button type="button" id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg font-bold" title="মুছে ফেলুন">&times;</button>
+        </div>
       </div>
     </div>
 
     <!-- Step 2: Print Settings -->
     <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm opacity-60 pointer-events-none transition" id="settingsCard">
-      <h2 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-1.5">
-        <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">2</span>
-        প্রিন্ট অপশন ঠিক করুন
-      </h2>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold text-gray-800 text-base flex items-center gap-1.5">
+          <span class="w-6 h-6 rounded-full bg-pink-100 text-pink-600 text-xs flex items-center justify-center font-bold">2</span>
+          প্রিন্ট অপশন ঠিক করুন
+        </h2>
+        <button type="button" id="btnOpenPreviewMini" class="text-xs text-pink-600 hover:underline font-bold flex items-center gap-1">
+          <span>👁️ প্রিন্ট কেমন দেখাবে?</span>
+        </button>
+      </div>
 
       <div class="space-y-3">
         <!-- Paper Size / Mode (Document vs Photo) -->
@@ -207,6 +217,14 @@
             <button type="button" id="btnPlusCopy" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 font-bold text-gray-700 text-base">+</button>
           </div>
         </div>
+
+        <!-- Preview Big Button -->
+        <div class="pt-2">
+          <button type="button" id="btnOpenPreviewBanner" class="w-full py-2.5 bg-pink-50 hover:bg-pink-100 border border-pink-300 text-pink-700 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition shadow-sm">
+            <span>👁️</span>
+            <span>প্রিন্ট কেমন দেখাবে প্রিভিউ দেখুন (Print Preview)</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -278,6 +296,70 @@
         <button type="button" id="btnConfirmOrder" class="w-full py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition flex items-center justify-center gap-2 text-base">
           <span>🖨️ প্রিন্ট অর্ডার নিশ্চিত করুন</span>
         </button>
+      </div>
+    </div>
+
+    <!-- Print Preview Modal Dialog -->
+    <div id="previewModalOverlay" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
+      <div class="bg-white max-w-lg w-full max-h-[92vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in border border-gray-100">
+        
+        <!-- Modal Header -->
+        <div class="px-4 py-3 bg-gray-900 text-white flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">👁️</span>
+            <div>
+              <h3 class="font-bold text-sm leading-tight">প্রিন্ট প্রিভিউ (Print Preview)</h3>
+              <p class="text-[11px] text-gray-300 truncate max-w-[220px]" id="previewModalFileName">document.pdf</p>
+            </div>
+          </div>
+          <button type="button" id="btnClosePreviewModal" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1">&times;</button>
+        </div>
+
+        <!-- Sizing & Guidelines Banner -->
+        <div id="previewInfoBanner" class="bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 px-4 py-2 text-xs flex items-center justify-between">
+          <div class="flex items-center gap-1.5 text-pink-900 font-bold" id="previewDimensionBadge">
+            <span>📐</span> <span id="previewDimensionText">আসল NID মাপ: ৮৫.৬ মিমি × ৫৪.০ মিমি</span>
+          </div>
+          <div class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700" id="previewModeBadge">
+            রঙিন (Color)
+          </div>
+        </div>
+
+        <!-- Preview Viewport -->
+        <div class="flex-1 overflow-auto p-4 bg-gray-100 flex items-center justify-center min-h-[320px] max-h-[58vh] relative">
+          <!-- Image Preview Container (for NID & Photos) -->
+          <div id="previewImgContainer" class="w-full flex flex-col items-center justify-center">
+            <img id="previewImg" src="" alt="Print Preview" class="max-w-full max-h-[52vh] object-contain rounded-lg shadow-md border bg-white transition duration-200">
+            <p class="text-[11px] text-gray-600 mt-2 text-center font-medium" id="previewGuideNote">
+              ✂️ ড্যাশ লাইন বরাবর কাটুন এবং মাঝখান দিয়ে ভাঁজ করে লেমিনেটিং করুন
+            </p>
+          </div>
+
+          <!-- PDF Preview Container -->
+          <div id="previewPdfContainer" class="w-full h-full min-h-[360px] hidden flex flex-col">
+            <iframe id="previewPdfFrame" src="" class="w-full h-[52vh] rounded-lg border bg-white shadow-inner"></iframe>
+            <p class="text-[11px] text-gray-500 mt-1 text-center font-medium">
+              📄 ডকুমেন্টের পাতাগুলো স্ক্রল করে দেখুন
+            </p>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="p-3.5 bg-white border-t flex items-center justify-between gap-2">
+          <div class="text-xs">
+            <span class="text-gray-400 block text-[10px]">মোট প্রিন্ট খরচ</span>
+            <span class="text-base font-black text-pink-600" id="previewModalTotal">৳ 0</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" id="btnClosePreviewBtn" class="px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition">
+              বন্ধ করুন
+            </button>
+            <button type="button" id="btnConfirmFromPreview" class="px-4 py-2 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow hover:opacity-95 transition flex items-center gap-1.5">
+              <span>সব ঠিক আছে, এগিয়ে যান</span> <span>➔</span>
+            </button>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -657,6 +739,116 @@
       navigator.clipboard.writeText(mfsNumber.innerText);
       alert('নম্বর কপি করা হয়েছে!');
     }
+
+    // --- PRINT PREVIEW MODAL LOGIC ---
+    const previewModalOverlay = document.getElementById('previewModalOverlay');
+    const previewModalFileName = document.getElementById('previewModalFileName');
+    const previewDimensionText = document.getElementById('previewDimensionText');
+    const previewModeBadge = document.getElementById('previewModeBadge');
+    const previewImgContainer = document.getElementById('previewImgContainer');
+    const previewImg = document.getElementById('previewImg');
+    const previewGuideNote = document.getElementById('previewGuideNote');
+    const previewPdfContainer = document.getElementById('previewPdfContainer');
+    const previewPdfFrame = document.getElementById('previewPdfFrame');
+    const previewModalTotal = document.getElementById('previewModalTotal');
+    const btnOpenPreview = document.getElementById('btnOpenPreview');
+    const btnOpenPreviewMini = document.getElementById('btnOpenPreviewMini');
+    const btnOpenPreviewBanner = document.getElementById('btnOpenPreviewBanner');
+    const btnClosePreviewModal = document.getElementById('btnClosePreviewModal');
+    const btnClosePreviewBtn = document.getElementById('btnClosePreviewBtn');
+    const btnConfirmFromPreview = document.getElementById('btnConfirmFromPreview');
+
+    function openPrintPreview() {
+      if (!uploadedFile) {
+        alert('অনুগ্রহ করে আগে ফাইল সিলেক্ট বা আপলোড করুন।');
+        return;
+      }
+
+      previewModalFileName.innerText = uploadedFile.original_filename;
+      previewModalTotal.innerText = totalPriceText.innerText;
+
+      const isNid = uploadedFile.is_nid || currentMode === 'nid';
+      const colorRadio = document.querySelector('input[name="color_mode"]:checked');
+      const color = colorRadio ? colorRadio.value : 'bw';
+      const previewUrl = uploadedFile.preview_url || `/api/preview/${uploadedFile.file_id}`;
+
+      // Color Badge & Visual Filter
+      if (color === 'bw') {
+        previewModeBadge.innerText = 'সাদাকালো (B&W)';
+        previewModeBadge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-gray-200 text-gray-800';
+        previewImg.style.filter = 'grayscale(100%) contrast(105%)';
+      } else {
+        previewModeBadge.innerText = 'রঙিন (Color)';
+        previewModeBadge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700';
+        previewImg.style.filter = 'none';
+      }
+
+      if (isNid) {
+        // NID Card Sheet: 85.60 mm x 53.98 mm exact
+        previewDimensionText.innerText = 'আসল NID মাপ: ৮৫.৬ মিমি × ৫৪.০ মিমি (১০০% আসল সাইজ)';
+        previewGuideNote.innerText = '✂️ চারপাশের ড্যাশ লাইন বরাবর কাটুন এবং মাঝখান দিয়ে ভাঁজ করে লেমিনেটিং করুন।';
+        previewGuideNote.classList.remove('hidden');
+
+        previewImgContainer.classList.remove('hidden');
+        previewPdfContainer.classList.add('hidden');
+        previewImg.src = previewUrl;
+      } else if (uploadedFile.file_type === 'image') {
+        const paperSizeRadio = document.querySelector('input[name="paper_size"]:checked');
+        const isPhoto = paperSizeRadio && paperSizeRadio.value === '4x6';
+
+        if (isPhoto) {
+          previewDimensionText.innerText = '৪×৬ ইঞ্চি পাসপোর্ট শিট (৬টি পাসপোর্ট ফটো)';
+          previewGuideNote.innerText = '✂️ ৪×৬ ফটো পেপারে ৬টি ছবি একসাথে সুন্দরভাবে সাজানো হবে।';
+        } else {
+          previewDimensionText.innerText = 'A4 প্রিন্ট পেপার সাইজ';
+          previewGuideNote.innerText = '📄 ডকুমেন্ট বা ছবি A4 পাতায় ফিট করে প্রিন্ট হবে।';
+        }
+        previewGuideNote.classList.remove('hidden');
+
+        previewImgContainer.classList.remove('hidden');
+        previewPdfContainer.classList.add('hidden');
+        previewImg.src = previewUrl;
+      } else {
+        // PDF File
+        const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
+        const nup = nupEl ? parseInt(nupEl.value) : 1;
+
+        if (nup > 1) {
+          previewDimensionText.innerText = `A4 পেপার (${nup}-in-1 মোড, ${uploadedFile.page_count} পাতা)`;
+        } else {
+          previewDimensionText.innerText = `A4 পেপার (মোট ${uploadedFile.page_count} টি পাতা)`;
+        }
+        previewGuideNote.classList.add('hidden');
+
+        previewImgContainer.classList.add('hidden');
+        previewPdfContainer.classList.remove('hidden');
+        previewPdfFrame.src = previewUrl + '#toolbar=0';
+      }
+
+      previewModalOverlay.classList.remove('hidden');
+    }
+
+    function closePrintPreview() {
+      previewModalOverlay.classList.add('hidden');
+      previewPdfFrame.src = '';
+    }
+
+    if (btnOpenPreview) btnOpenPreview.addEventListener('click', openPrintPreview);
+    if (btnOpenPreviewMini) btnOpenPreviewMini.addEventListener('click', openPrintPreview);
+    if (btnOpenPreviewBanner) btnOpenPreviewBanner.addEventListener('click', openPrintPreview);
+    if (btnClosePreviewModal) btnClosePreviewModal.addEventListener('click', closePrintPreview);
+    if (btnClosePreviewBtn) btnClosePreviewBtn.addEventListener('click', closePrintPreview);
+    previewModalOverlay.addEventListener('click', (e) => {
+      if (e.target === previewModalOverlay) closePrintPreview();
+    });
+
+    btnConfirmFromPreview.addEventListener('click', () => {
+      closePrintPreview();
+      document.getElementById('paymentCard').scrollIntoView({ behavior: 'smooth' });
+      const confirmBtn = document.getElementById('btnConfirmOrder');
+      confirmBtn.classList.add('ring-4', 'ring-pink-300');
+      setTimeout(() => confirmBtn.classList.remove('ring-4', 'ring-pink-300'), 1500);
+    });
 
     // Place Order
     document.getElementById('btnConfirmOrder').addEventListener('click', async () => {

@@ -2,7 +2,7 @@ import os
 import io
 import math
 import qrcode
-from PIL import Image, ImageOps, ImageDraw
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter, Transformation
 from typing import Tuple, Optional
 
@@ -68,59 +68,94 @@ def create_4x6_passport_sheet(image_path: str, output_path: str, count: int = 6)
         print(f"[!] Error creating passport sheet: {e}")
         return image_path
 
-def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: str, layout: str = "vertical") -> str:
+def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: str, color_mode: str = "color") -> str:
     """
     Combines Front and Back of Bangladeshi NID / Smart Card onto a single A4 page (300 DPI)
-    Standard NID size: 85.6mm x 54mm (approx 1010 x 638 px at 300 DPI).
-    Places Front on top, Back on bottom with cutting border and dashed lines.
+    EXACT Standard NID size: 85.60 mm x 53.98 mm (1011 x 638 px at 300 DPI).
+    Places Front on top, Back on bottom with cutting border, fold guide, and alignment marks.
     """
     try:
-        # A4 at 300 DPI: 2480 x 3508 pixels
+        # A4 sheet at 300 DPI: 2480 x 3508 pixels
         page_w, page_h = 2480, 3508
         sheet = Image.new("RGB", (page_w, page_h), "white")
         draw = ImageDraw.Draw(sheet)
         
+        # Exact NID dimensions (85.6mm x 54mm)
         nid_w, nid_h = 1011, 638
         
-        # Load & resize front image
+        # Load Front
         with Image.open(front_img_path) as f_img:
             f_img = ImageOps.exif_transpose(f_img)
+            if color_mode == "bw":
+                f_img = ImageOps.grayscale(f_img).convert("RGB")
+                f_img = ImageOps.autocontrast(f_img)
             front_resized = ImageOps.fit(f_img, (nid_w, nid_h), Image.Resampling.LANCZOS)
-            front_bordered = ImageOps.expand(front_resized, border=2, fill="#9ca3af")
+            front_card = ImageOps.expand(front_resized, border=2, fill="#4b5563")
             
-        # Load & resize back image
+        # Load Back
         with Image.open(back_img_path) as b_img:
             b_img = ImageOps.exif_transpose(b_img)
+            if color_mode == "bw":
+                b_img = ImageOps.grayscale(b_img).convert("RGB")
+                b_img = ImageOps.autocontrast(b_img)
             back_resized = ImageOps.fit(b_img, (nid_w, nid_h), Image.Resampling.LANCZOS)
-            back_bordered = ImageOps.expand(back_resized, border=2, fill="#9ca3af")
+            back_card = ImageOps.expand(back_resized, border=2, fill="#4b5563")
             
-        if layout == "horizontal":
-            # Side by side layout
-            gap = 140
-            total_w = nid_w * 2 + gap
-            start_x = (page_w - total_w) // 2
-            start_y = 600
+        # Standard positioning (Centered horizontally, top & bottom)
+        start_x = (page_w - nid_w) // 2
+        start_y = 550
+        gap = 140
+        
+        y_front = start_y
+        y_back = start_y + nid_h + gap
+        
+        sheet.paste(front_card, (start_x, y_front))
+        sheet.paste(back_card, (start_x, y_back))
+        
+        # Load proper font size for 300 DPI canvas
+        try:
+            font = ImageFont.load_default(size=32)
+            font_title = ImageFont.load_default(size=38)
+            font_small = ImageFont.load_default(size=26)
+        except Exception:
+            font = ImageFont.load_default()
+            font_title = font
+            font_small = font
+
+        # Descriptive title at top
+        draw.text((start_x, y_front - 140), "BANGLADESH SMART NID CARD - 100% EXACT SCALE", fill="#1f2937", font=font_title)
+        draw.text((start_x, y_front - 90), "আসল সাইজ: ৮৫.৬০ মিমি x ৫৩.৯৮ মিমি (ISO/IEC 7810 ID-1 Standard)", fill="#4b5563", font=font_small)
+
+        # Draw cutting guidelines (dashed lines around cards)
+        dash_len = 16
+        def draw_dashed_box(x1, y1, x2, y2):
+            for x in range(x1, x2, dash_len * 2):
+                draw.line([(x, y1), (min(x + dash_len, x2), y1)], fill="#6b7280", width=2)
+                draw.line([(x, y2), (min(x + dash_len, x2), y2)], fill="#6b7280", width=2)
+            for y in range(y1, y2, dash_len * 2):
+                draw.line([(x1, y), (x1, min(y + dash_len, y2))], fill="#6b7280", width=2)
+                draw.line([(x2, y), (x2, min(y + dash_len, y2))], fill="#6b7280", width=2)
+                
+        # Outer cutting margin (+20px)
+        margin = 20
+        draw_dashed_box(start_x - margin, y_front - margin, start_x + nid_w + margin, y_front + nid_h + margin)
+        draw_dashed_box(start_x - margin, y_back - margin, start_x + nid_w + margin, y_back + nid_h + margin)
+        
+        # Center fold guide line
+        y_fold = y_front + nid_h + (gap // 2)
+        for x in range(start_x - 60, start_x + nid_w + 60, 24):
+            draw.line([(x, y_fold), (min(x + 12, start_x + nid_w + 60), y_fold)], fill="#9ca3af", width=2)
             
-            sheet.paste(front_bordered, (start_x, start_y))
-            sheet.paste(back_bordered, (start_x + nid_w + gap, start_y))
-            
-            # Draw cutting guides
-            draw.text((start_x, start_y - 50), "FRONT (সামনে)", fill="#4b5563")
-            draw.text((start_x + nid_w + gap, start_y - 50), "BACK (পেছনে)", fill="#4b5563")
+        # Descriptive guidelines text
+        draw.text((start_x, y_front - 45), "NID FRONT (সামনের পিঠ)", fill="#374151", font=font)
+        draw.text((start_x, y_back - 45), "NID BACK (পেছনের পিঠ)", fill="#374151", font=font)
+        draw.text((start_x + nid_w + 35, y_fold - 16), "<-- FOLD HERE (মাঝখান দিয়ে ভাঁজ করার দাগ)", fill="#6b7280", font=font_small)
+        draw.text((start_x, y_back + nid_h + 30), "✂️ কাটার দাগ: চারপাশের ড্যাশ লাইন বরাবর কাটুন এবং মাঝখান দিয়ে ভাঁজ করে লেমিনেটিং করুন।", fill="#6b7280", font=font_small)
+        
+        if output_path.lower().endswith(".pdf"):
+            sheet.save(output_path, "PDF", resolution=300.0)
         else:
-            # Standard vertical layout (top & bottom - most common for photocopying in BD)
-            gap = 180
-            start_x = (page_w - nid_w) // 2
-            start_y = 600
-            
-            sheet.paste(front_bordered, (start_x, start_y))
-            sheet.paste(back_bordered, (start_x, start_y + nid_h + gap))
-            
-            # Label & guidelines
-            draw.text((start_x, start_y - 50), "NID FRONT (সামনের পিঠ)", fill="#4b5563")
-            draw.text((start_x, start_y + nid_h + gap - 50), "NID BACK (পেছনের পিঠ)", fill="#4b5563")
-            
-        sheet.save(output_path, "JPEG", quality=95)
+            sheet.save(output_path, "JPEG", quality=95, dpi=(300, 300))
         return output_path
     except Exception as e:
         print(f"[!] Error creating NID sheet: {e}")

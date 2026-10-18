@@ -373,7 +373,8 @@ async def upload_file(file: UploadFile = File(...)):
         "original_filename": file.filename,
         "file_type": file_type,
         "page_count": pages,
-        "file_size": len(content)
+        "file_size": len(content),
+        "preview_url": f"/api/preview/{file_id}"
     }
 
 @app.post("/api/upload-nid")
@@ -405,8 +406,35 @@ async def upload_nid_card(front: UploadFile = File(...), back: UploadFile = File
         "original_filename": "NID_Card_Front_Back.jpg",
         "file_type": "image",
         "page_count": 1,
-        "is_nid": True
+        "is_nid": True,
+        "preview_url": f"/api/preview/{combined_id}"
     }
+
+@app.get("/api/preview/{file_id}")
+async def preview_file(file_id: str):
+    """Provides safe preview of uploaded file or generated NID card sheet."""
+    safe_filename = os.path.basename(file_id)
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    ext = safe_filename.split(".")[-1].lower() if "." in safe_filename else ""
+    if ext == "pdf":
+        media_type = "application/pdf"
+    elif ext in ["jpg", "jpeg"]:
+        media_type = "image/jpeg"
+    elif ext == "png":
+        media_type = "image/png"
+    elif ext == "webp":
+        media_type = "image/webp"
+    else:
+        media_type = "application/octet-stream"
+        
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        headers={"Content-Disposition": f"inline; filename={safe_filename}"}
+    )
 
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
