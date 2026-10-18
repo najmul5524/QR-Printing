@@ -8,3 +8,4 @@ pillow>=10.2.0
 qrcode[pil]>=7.4.2
 aiofiles>=23.2.1
 pydantic>=2.6.4
+

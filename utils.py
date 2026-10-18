@@ -81,3 +81,4 @@ def secure_delete_file(file_path: str):
             print(f"[+] Securely deleted file: {file_path}")
     except Exception as e:
         print(f"[!] Failed to delete file {file_path}: {e}")
+

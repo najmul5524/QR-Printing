@@ -11,3 +11,4 @@ services:
         generateValue: true
       - key: BASE_URL
         value: https://qr-se-print.onrender.com
+

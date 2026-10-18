@@ -249,3 +249,4 @@ def get_shop_stats(shop_id: int) -> Dict[str, Any]:
         "today_orders": today_stats["today_orders"],
         "today_revenue": today_stats["today_revenue"]
     }
+
