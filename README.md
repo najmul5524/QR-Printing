@@ -59,7 +59,10 @@ python main.py
 
 ### ধাপ ৩: উইন্ডোজ প্রিন্ট এজেন্ট চালু করুন
 1. `agent/start_agent.bat` ফাইলে ডাবল ক্লিক করুন।
-2. এজেন্ট স্বয়ংক্রিয়ভাবে সার্ভারের সাথে যুক্ত হবে এবং ড্যাশবোর্ডে **"উইন্ডোজ এজেন্ট সংযুক্ত"** সবুজ ব্যাজ দেখাবে।
+2. প্রতিবার চালুর সময় Admin Dashboard-এর API Key চাইবে; key paste করে Enter চাপুন।
+3. এজেন্ট সার্ভারের সাথে যুক্ত হবে এবং ড্যাশবোর্ডে **"উইন্ডোজ এজেন্ট সংযুক্ত"** সবুজ ব্যাজ দেখাবে।
+
+`print_agent.py` নিজে আর API Key চাইবে না। API Key দেওয়ার একমাত্র জায়গা হলো `Start_Agent.bat` বা root-এর `run_agent.bat`।
 
 ---
 
@@ -82,6 +85,18 @@ python main.py
 - আপলোডের পর **ট্রান্সফার** চাপলে নিরাপদ filename-সহ সরাসরি download link কপি হবে।
 
 > Render-এর free web service-এ local disk স্থায়ী নয়। গুরুত্বপূর্ণ অর্ডার history/file archive রাখতে production-এ persistent disk বা object storage যোগ করুন।
+
+### Render keep-alive cron job
+
+প্রজেক্টে `.github/workflows/render-keepalive.yml` দেওয়া আছে। GitHub-এ push করার পর GitHub Actions প্রতি ১০ মিনিটে:
+
+```text
+https://qr-se-print.onrender.com/health
+```
+
+endpoint-এ ছোট একটি request পাঠাবে। নিজের Render service-এর নাম আলাদা হলে ওই workflow ফাইলে `RENDER_HEALTH_URL` পরিবর্তন করুন। GitHub Actions-এ workflow-টি একবার **Actions → Keep Render service warm → Run workflow** থেকে manually চালিয়ে পরীক্ষা করা যাবে।
+
+> এই job Render service-কে ping করে warm রাখার চেষ্টা করে; GitHub Actions-এর schedule কখনও delayed হতে পারে এবং Render/GitHub-এর free-plan policy অনুযায়ী সবসময় uptime guarantee করা যায় না।
 
 ---
 

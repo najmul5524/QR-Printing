@@ -13,3 +13,4 @@ temp_print/*
 env/
 build/
 dist/
+agent/agent_config.json

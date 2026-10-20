@@ -37,6 +37,11 @@ app = FastAPI(title="QR Se Print - Auto Print Platform", version="1.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
+@app.get("/health")
+async def health_check():
+    """Lightweight endpoint for Render health checks and keep-alive schedulers."""
+    return {"status": "ok", "service": "qr-se-print", "timestamp": datetime.utcnow().isoformat() + "Z"}
+
 # ── Connection Manager for WebSockets ──
 class ConnectionManager:
     def __init__(self):
