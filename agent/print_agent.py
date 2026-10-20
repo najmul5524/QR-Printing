@@ -183,16 +183,10 @@ async def run_agent():
     server_url = config.get("server_url", "https://qr-se-print.onrender.com").rstrip("/")
     api_key = config.get("api_key", "").strip()
     
-<<<<<<< HEAD
-    # If API key is not configured, prompt user
-    if not api_key:
-        api_key = prompt_login_or_key(server_url, config)
-=======
     # API key is collected by start_agent.bat before Python starts.
     if not api_key or api_key == "qsp_demo_key_here":
         print("[ERROR] API Key পাওয়া যায়নি। Start_Agent.bat চালিয়ে API Key দিন।")
         return
->>>>>>> 7c8a349 (Add API prompt and Render keep alive job)
             
     ws_protocol = "wss" if server_url.startswith("https") else "ws"
     host_port = server_url.split("://")[-1]
@@ -227,13 +221,8 @@ async def run_agent():
             err_msg = str(e)
             if "403" in err_msg or "1008" in err_msg or "rejected" in err_msg:
                 print(f"\n[ERROR] Server rejected this API Key ({api_key})!")
-<<<<<<< HEAD
-                api_key = prompt_login_or_key(server_url, config)
-                continue
-=======
                 print(">> Start_Agent.bat বন্ধ করে সঠিক API Key দিয়ে আবার চালু করুন।")
                 return
->>>>>>> 7c8a349 (Add API prompt and Render keep alive job)
             elif "ConnectionRefused" in err_msg or "WinError 10061" in err_msg:
                 print(f"\r[OFFLINE] Server not reachable. Retrying in {retry_delay}s...", end="")
             else:
