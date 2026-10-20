@@ -68,7 +68,7 @@ def create_4x6_passport_sheet(image_path: str, output_path: str, count: int = 6)
         print(f"[!] Error creating passport sheet: {e}")
         return image_path
 
-def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: str, color_mode: str = "color") -> str:
+def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: str, color_mode: str = "color", layout: str = "vertical") -> str:
     """
     Combines Front and Back of Bangladeshi NID / Smart Card onto a single A4 page (300 DPI)
     EXACT Standard NID size: 85.60 mm x 53.98 mm (1011 x 638 px at 300 DPI).
@@ -101,7 +101,8 @@ def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: 
             back_resized = ImageOps.fit(b_img, (nid_w, nid_h), Image.Resampling.LANCZOS)
             back_card = ImageOps.expand(back_resized, border=2, fill="#4b5563")
             
-        # Standard positioning (Centered horizontally, top & bottom)
+        # Standard positioning (Centered horizontally, top & bottom).
+        # `layout` is accepted for API compatibility; both cards retain exact ID-1 size.
         start_x = (page_w - nid_w) // 2
         start_y = 550
         gap = 140
@@ -159,7 +160,7 @@ def create_nid_card_sheet(front_img_path: str, back_img_path: str, output_path: 
         return output_path
     except Exception as e:
         print(f"[!] Error creating NID sheet: {e}")
-        return front_img_path
+        raise
 
 def create_nup_pdf(input_pdf_path: str, output_pdf_path: str, nup: int = 2) -> Tuple[str, int]:
     """

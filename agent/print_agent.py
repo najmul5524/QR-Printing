@@ -22,7 +22,7 @@ AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(AGENT_DIR, "agent_config.json")
 
 DEFAULT_CONFIG = {
-    "server_url": "https://qr-printing.onrender.com",
+    "server_url": "https://qr-se-print.onrender.com",
     "api_key": ""
 }
 
@@ -180,7 +180,7 @@ async def run_agent():
     print("=" * 60)
     
     config = load_config()
-    server_url = config.get("server_url", "https://qr-printing.onrender.com").rstrip("/")
+    server_url = config.get("server_url", "https://qr-se-print.onrender.com").rstrip("/")
     api_key = config.get("api_key", "").strip()
     
     # If API key is not configured, prompt user

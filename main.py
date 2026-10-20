@@ -22,6 +22,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -398,10 +400,15 @@ async def upload_file(file: UploadFile = File(...)):
     if ext not in ["pdf", "jpg", "jpeg", "png", "webp"]:
         raise HTTPException(status_code=400, detail="শুধুমাত্র PDF অথবা ছবি (JPG, PNG) আপলোড করা যাবে।")
     
-    file_id = f"{uuid.uuid4().hex[:10]}_{file.filename}"
+    original_filename = os.path.basename(file.filename or "upload")
+    file_id = f"{uuid.uuid4().hex[:10]}_{original_filename}"
     save_path = os.path.join(UPLOAD_DIR, file_id)
     
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="ফাইলের সর্বোচ্চ আকার ৫০ MB হতে পারবে।")
+    if not content:
+        raise HTTPException(status_code=400, detail="খালি ফাইল আপলোড করা যাবে না।")
     with open(save_path, "wb") as f:
         f.write(content)
         
@@ -410,7 +417,7 @@ async def upload_file(file: UploadFile = File(...)):
     
     return {
         "file_id": file_id,
-        "original_filename": file.filename,
+        "original_filename": original_filename,
         "file_type": file_type,
         "page_count": pages,
         "file_size": len(content),
@@ -422,21 +429,34 @@ async def upload_nid_card(front: UploadFile = File(...), back: UploadFile = File
     """Uploads Front and Back of NID card and combines them onto a single A4 sheet with cutting guidelines."""
     front_ext = front.filename.split(".")[-1].lower() if "." in front.filename else "jpg"
     back_ext = back.filename.split(".")[-1].lower() if "." in back.filename else "jpg"
+    if front_ext not in ALLOWED_IMAGE_EXTENSIONS or back_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="NID-এর জন্য JPG, PNG অথবা WEBP ছবি দিন।")
     
     front_id = f"nid_f_{uuid.uuid4().hex[:8]}.{front_ext}"
     back_id = f"nid_b_{uuid.uuid4().hex[:8]}.{back_ext}"
     front_path = os.path.join(UPLOAD_DIR, front_id)
     back_path = os.path.join(UPLOAD_DIR, back_id)
     
+    front_content = await front.read()
+    back_content = await back.read()
+    if not front_content or not back_content:
+        raise HTTPException(status_code=400, detail="NID-এর দুই পিঠের ছবিই দিতে হবে।")
+    if len(front_content) > MAX_UPLOAD_BYTES or len(back_content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="প্রতিটি ছবির সর্বোচ্চ আকার ৫০ MB হতে পারবে।")
     with open(front_path, "wb") as f:
-        f.write(await front.read())
+        f.write(front_content)
     with open(back_path, "wb") as f:
-        f.write(await back.read())
+        f.write(back_content)
         
     combined_id = f"nid_sheet_{uuid.uuid4().hex[:8]}.jpg"
     combined_path = os.path.join(UPLOAD_DIR, combined_id)
     
-    utils.create_nid_card_sheet(front_path, back_path, combined_path, layout="vertical")
+    try:
+        utils.create_nid_card_sheet(front_path, back_path, combined_path, layout="vertical")
+    except Exception as exc:
+        utils.secure_delete_file(front_path)
+        utils.secure_delete_file(back_path)
+        raise HTTPException(status_code=422, detail=f"NID ছবি প্রসেস করা যায়নি: {exc}")
     
     utils.secure_delete_file(front_path)
     utils.secure_delete_file(back_path)
@@ -449,6 +469,19 @@ async def upload_nid_card(front: UploadFile = File(...), back: UploadFile = File
         "is_nid": True,
         "preview_url": f"/api/preview/{combined_id}"
     }
+
+@app.get("/api/transfer/{file_id}")
+async def transfer_file(file_id: str):
+    """Returns an uploaded file for direct transfer/download between devices."""
+    safe_filename = os.path.basename(file_id)
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="ফাইলটি পাওয়া যায়নি বা ইতিমধ্যে মুছে গেছে।")
+    return FileResponse(
+        file_path,
+        filename=safe_filename,
+        headers={"Cache-Control": "no-store"}
+    )
 
 @app.get("/api/preview/{file_id}")
 async def preview_file(file_id: str):

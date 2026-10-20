@@ -107,6 +107,9 @@
           <button type="button" id="btnOpenPreview" class="px-2.5 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition">
             <span>👁️</span> <span>প্রিভিউ</span>
           </button>
+          <button type="button" id="btnTransferFile" class="px-2.5 py-1.5 bg-gray-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition" title="অন্য ডিভাইসে পাঠানোর লিংক কপি করুন">
+            <span>↗</span> <span>ট্রান্সফার</span>
+          </button>
           <button type="button" id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg font-bold" title="মুছে ফেলুন">&times;</button>
         </div>
       </div>
@@ -452,6 +455,7 @@
     const fileNameText = document.getElementById('fileNameText');
     const fileMetaText = document.getElementById('fileMetaText');
     const btnRemoveFile = document.getElementById('btnRemoveFile');
+    const btnTransferFile = document.getElementById('btnTransferFile');
 
     const settingsCard = document.getElementById('settingsCard');
     const paymentCard = document.getElementById('paymentCard');
@@ -502,6 +506,9 @@
       btnMergeNid.disabled = true;
       btnMergeNid.className = 'w-full py-2.5 bg-gray-200 text-gray-500 font-bold text-xs rounded-xl transition cursor-not-allowed';
       fileInfoBadge.classList.add('hidden');
+      fileInput.value = '';
+      nidFrontInput.value = '';
+      nidBackInput.value = '';
       settingsCard.classList.add('opacity-60', 'pointer-events-none');
       paymentCard.classList.add('opacity-60', 'pointer-events-none');
       totalPriceText.innerText = '৳ 0';
@@ -562,7 +569,9 @@
           uploadedFile = JSON.parse(xhr.responseText);
           showUploadedFile();
         } else {
-          alert('NID ছবি প্রসেসিং ব্যর্থ হয়েছে।');
+          let message = 'NID ছবি প্রসেসিং ব্যর্থ হয়েছে।';
+          try { message = JSON.parse(xhr.responseText).detail || message; } catch (_) {}
+          alert(message);
           dropzoneNid.classList.remove('hidden');
         }
       };
@@ -607,7 +616,9 @@
           uploadedFile = JSON.parse(xhr.responseText);
           showUploadedFile();
         } else {
-          alert('ফাইল আপলোড ব্যর্থ হয়েছে।');
+          let message = 'ফাইল আপলোড ব্যর্থ হয়েছে।';
+          try { message = JSON.parse(xhr.responseText).detail || message; } catch (_) {}
+          alert(message);
           dropzoneNormal.classList.remove('hidden');
         }
       };
@@ -630,6 +641,18 @@
 
       calculateBill();
     }
+
+    async function transferUploadedFile() {
+      if (!uploadedFile) return;
+      const transferUrl = `${location.origin}/api/transfer/${encodeURIComponent(uploadedFile.file_id)}`;
+      try {
+        await navigator.clipboard.writeText(transferUrl);
+        alert('ফাইল ট্রান্সফার লিংক কপি হয়েছে। অন্য ডিভাইসে লিংকটি খুললেই ফাইল ডাউনলোড হবে।');
+      } catch (err) {
+        window.prompt('এই লিংকটি কপি করুন:', transferUrl);
+      }
+    }
+    btnTransferFile.addEventListener('click', transferUploadedFile);
 
     btnRemoveFile.addEventListener('click', () => {
       resetUploads();
