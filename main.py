@@ -42,6 +42,11 @@ async def health_check():
     """Lightweight endpoint for Render health checks and keep-alive schedulers."""
     return {"status": "ok", "service": "qr-se-print", "timestamp": datetime.utcnow().isoformat() + "Z"}
 
+@app.get("/ping")
+async def ping():
+    """Minimal keep-alive endpoint for cron services."""
+    return Response(content="pong", media_type="text/plain")
+
 # ── Connection Manager for WebSockets ──
 class ConnectionManager:
     def __init__(self):

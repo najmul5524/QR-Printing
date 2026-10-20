@@ -13,5 +13,5 @@ jobs:
     steps:
       - name: Ping Render health endpoint
         env:
-          RENDER_HEALTH_URL: https://qr-se-print.onrender.com/health
+          RENDER_HEALTH_URL: https://qr-se-print.onrender.com/ping
         run: curl --fail --silent --show-error --max-time 30 "$RENDER_HEALTH_URL"
