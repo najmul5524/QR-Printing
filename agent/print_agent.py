@@ -33,9 +33,11 @@ def load_config():
         return DEFAULT_CONFIG
     
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        # Windows PowerShell 5.1 may write UTF-8 with a BOM.
+        with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
             return json.load(f)
-    except Exception:
+    except Exception as exc:
+        print(f"[!] Could not read agent_config.json: {exc}")
         return DEFAULT_CONFIG
 
 def save_config(cfg):
