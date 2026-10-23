@@ -11,6 +11,7 @@ temp_print/*
 .env
 .venv
 env/
+
+
 build/
-dist/
-agent/agent_config.json
+__pycache__/

@@ -68,6 +68,9 @@
           <p class="text-xs text-pink-100 mt-1">কাউন্টারে কিউআর কোড পোস্টার রাখুন</p>
         </div>
         <div class="mt-3 flex gap-2">
+          <a href="/transfer" target="_blank" class="px-3 py-1.5 bg-white text-pink-600 rounded-lg text-xs font-bold hover:bg-pink-50 transition">
+            📲 QR ট্রান্সফার
+          </a>
           <a href="/admin/qr-standee" target="_blank" class="px-3 py-1.5 bg-white text-pink-600 rounded-lg text-xs font-bold hover:bg-pink-50 transition">
             🖨️ পোস্টার প্রিন্ট
           </a>
@@ -84,18 +87,13 @@
         <span class="text-2xl">⚠️</span>
         <div>
           <h4 class="font-bold text-sm text-yellow-900">দোকানের উইন্ডোজ প্রিন্ট এজেন্ট সংযুক্ত নেই!</h4>
-          <p class="text-xs text-yellow-700">স্বয়ংক্রিয় প্রিন্ট পেতে আপনার পিসিতে <code>run_agent.bat</code> চালু করুন (লগইন বা API Key দিন)।</p>
+          <p class="text-xs text-yellow-700">স্বয়ংক্রিয় প্রিন্ট পেতে আপনার পিসিতে <code>agent/start_agent.bat</code> ফাইলটি রান করুন।</p>
         </div>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <a href="/admin/download-config" download="agent_config.json" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm">
-          <span>📥</span> <span>agent_config.json ডাউনলোড</span>
-        </a>
-        <div class="flex items-center gap-1 bg-white border border-yellow-300 rounded px-2 py-1">
-          <span class="text-[11px] text-gray-400">Key:</span>
-          <code class="text-xs font-mono font-bold">{{ shop.api_key }}</code>
-          <button onclick="copyApiKey('{{ shop.api_key }}')" class="ml-1 text-[11px] bg-yellow-100 hover:bg-yellow-200 px-1.5 py-0.5 font-bold rounded">কপি</button>
-        </div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500">আপনার API Key:</span>
+        <code class="px-2 py-1 bg-white border border-yellow-300 rounded text-xs font-mono font-bold">{{ shop.api_key }}</code>
+        <button onclick="copyApiKey('{{ shop.api_key }}')" class="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 text-xs font-bold rounded">কপি</button>
       </div>
     </div>
 
@@ -169,6 +167,12 @@
                 {% endif %}
               </td>
               <td class="px-6 py-4 text-right space-x-1">
+                <a href="/admin/order/{{ o.id }}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
+                  ⬇️
+                </a>
+                <button onclick="openEditModal({{ o | tojson }})" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="কমান্ড এডিট করুন">
+                  ✏️ এডিট
+                </button>
                 {% if o.status in ["pending_payment", "paid"] %}
                   <button onclick="approveOrder('{{ o.id }}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
                     প্রিন্ট অনুমোদন
@@ -190,6 +194,59 @@
             {% endfor %}
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- ═════════ FILE TRANSFER ═════════ -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden" id="transferSection">
+      <div class="px-6 py-4 border-b bg-gray-50/50">
+        <h2 class="font-bold text-base text-gray-900">📤 ফাইল ট্রান্সফার</h2>
+        <p class="text-xs text-gray-500">কাস্টমারের পাঠানো ফাইল গ্রহণ করুন এবং কাস্টমারকে লিংক/কিউআর দিয়ে ফাইল পাঠান। সব ফাইল ২৪ ঘণ্টা পর স্বয়ংক্রিয়ভাবে মুছে যায়।</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x">
+        <!-- Inbox -->
+        <div class="p-5 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-sm text-gray-800">📥 কাস্টমারের পাঠানো ফাইল</h3>
+            <span id="inboxCount" class="text-xs bg-pink-100 text-pink-700 font-bold px-2 py-0.5 rounded-full">0</span>
+          </div>
+          <div id="inboxList" class="space-y-2 max-h-96 overflow-y-auto">
+            <p class="text-xs text-gray-400 py-6 text-center">কোনো ফাইল আসেনি। কাস্টমার পেজের "ফাইল ট্রান্সফার" ট্যাব থেকে ফাইল পাঠাবে।</p>
+          </div>
+        </div>
+
+        <!-- Send to customer -->
+        <div class="p-5 space-y-3">
+          <h3 class="font-bold text-sm text-gray-800">📤 কাস্টমারকে ফাইল পাঠান</h3>
+          <div class="space-y-2 text-xs">
+            <input type="file" id="sendFileInput" class="w-full text-xs border rounded-lg p-2">
+            <input type="text" id="sendNoteInput" maxlength="300" placeholder="নোট (ঐচ্ছিক)" class="w-full px-3 py-2 border rounded-lg">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" id="sendOneTime" class="w-4 h-4 rounded">
+              <span class="font-semibold text-gray-700">একবার ডাউনলোডের পর ফাইল মুছে ফেলুন</span>
+            </label>
+            <div id="sendProgress" class="hidden w-full bg-gray-200 h-2 rounded-full overflow-hidden"><div id="sendBar" class="bg-pink-600 h-full w-0 transition-all"></div></div>
+            <button type="button" id="btnSendFile" class="w-full py-2.5 bg-gray-900 hover:bg-black text-white font-bold rounded-lg text-sm">লিংক ও কিউআর তৈরি করুন</button>
+          </div>
+
+          <div id="shareResult" class="hidden p-3 bg-green-50 border border-green-200 rounded-xl text-xs space-y-2 text-center">
+            <p class="font-bold text-green-900">✅ কাস্টমারকে এই কিউআর স্ক্যান করান বা কোড/লিংক দিন</p>
+            <img id="shareQr" src="" alt="QR" class="w-40 h-40 mx-auto bg-white p-1 rounded border">
+            <p class="font-mono font-black text-xl tracking-widest" id="shareCode"></p>
+            <div class="flex gap-2">
+              <input id="shareLink" readonly class="flex-1 px-2 py-1.5 border rounded text-[11px] bg-white font-mono">
+              <button type="button" onclick="copyShareLink()" class="px-3 py-1.5 bg-green-600 text-white rounded font-bold">কপি</button>
+            </div>
+          </div>
+
+          <div>
+            <p class="text-xs font-bold text-gray-600 mb-1">পাঠানো ফাইলসমূহ</p>
+            <div id="outboxList" class="space-y-2 max-h-52 overflow-y-auto">
+              <p class="text-xs text-gray-400 text-center py-3">এখনো কোনো ফাইল পাঠানো হয়নি।</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -251,9 +308,13 @@
               <span class="text-gray-500">কালার (উভয় পিঠ) ৳:</span>
               <input type="number" step="0.5" name="rate_color_double" value="{{ shop.rate_color_double }}" class="w-full px-3 py-1.5 border rounded">
             </div>
-            <div class="col-span-2">
-              <span class="text-gray-500">৪×৬ পাসপোর্ট শিট (৬ কপি ফটো) ৳:</span>
+            <div>
+              <span class="text-gray-500">৪×৬ ফটো শিট ৳:</span>
               <input type="number" step="1" name="rate_photo_4x6" value="{{ shop.rate_photo_4x6 }}" class="w-full px-3 py-1.5 border rounded">
+            </div>
+            <div>
+              <span class="text-gray-500">A4 ফটো শিট (স্টুডিও) ৳:</span>
+              <input type="number" step="1" name="rate_photo_a4" value="{{ shop.rate_photo_a4 }}" class="w-full px-3 py-1.5 border rounded">
             </div>
           </div>
         </div>
@@ -263,6 +324,87 @@
           <button type="submit" class="px-5 py-2 bg-pink-600 text-white font-bold rounded-lg hover:bg-pink-700">সংরক্ষণ করুন</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Edit Order Modal Dialog -->
+  <div id="editOrderModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white max-w-lg w-full rounded-2xl p-6 shadow-2xl border border-gray-100 space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b">
+        <h3 class="font-bold text-base text-gray-900 flex items-center gap-2">
+          <span>✏️</span> <span>প্রিন্ট কমান্ড পরিবর্তন ও প্রিন্টার সিলেকশন</span>
+        </h3>
+        <button type="button" onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div class="bg-gray-50 p-2.5 rounded-xl border flex items-center justify-between">
+          <div>
+            <p class="font-bold text-gray-800" id="editModalFilename">filename.pdf</p>
+            <p class="text-[10px] text-gray-500 font-mono" id="editModalOrderId">Order ID: #</p>
+          </div>
+          <a id="editModalDownloadLink" href="#" target="_blank" download class="px-2.5 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-lg font-bold border border-pink-200 flex items-center gap-1">
+            <span>⬇️</span> <span>ডকুমেন্ট ডাউনলোড</span>
+          </a>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">কপি সংখ্যা</label>
+            <input type="number" id="editCopies" min="1" max="100" class="w-full px-3 py-2 border rounded-lg text-sm font-bold">
+          </div>
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">প্রিন্ট মোড (কালার/B&W)</label>
+            <select id="editColorMode" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+              <option value="bw">সাদাকালো (B&W)</option>
+              <option value="color">রঙিন (Color)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">পেপার সাইজ</label>
+            <select id="editPaperSize" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+              <option value="A4">A4 সাধারণ পেপার</option>
+              <option value="4x6">৪×৬ ফটো পেপার</option>
+              <option value="NID">NID / ID কার্ড আসল সাইজ</option>
+              <option value="PHOTO">ফটো শিট (স্টুডিও)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">পিঠ (Duplex)</label>
+            <select id="editDuplex" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+              <option value="single">এক পিঠ (Single-sided)</option>
+              <option value="double">উভয় পিঠ (Double-sided)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">পেজ রেঞ্জ</label>
+            <input type="text" id="editPageRange" placeholder="all অথবা 1,3,5-7" class="w-full px-3 py-2 border rounded-lg text-sm font-mono">
+          </div>
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">মোট বিল ৳</label>
+            <input type="number" step="0.5" id="editTotalPrice" class="w-full px-3 py-2 border rounded-lg text-sm font-bold text-pink-600">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-gray-600 mb-1">নির্দিষ্ট প্রিন্টারে প্রিন্ট দিন (প্রিন্টার সিলেকশন)</label>
+          <input type="text" id="editPrinterTarget" placeholder="খালি রাখলে উইন্ডোজের Default Printer-এ যাবে (যেমন: EPSON L3210 বা Canon G2010)" class="w-full px-3 py-2 border rounded-lg text-xs font-mono">
+          <p class="text-[10px] text-gray-400 mt-1">দোকানের পিসিতে থাকা প্রিন্টারের আসল নাম লিখুন (বা ডিফল্ট রাখুন)।</p>
+        </div>
+      </div>
+
+      <div class="pt-3 border-t flex justify-end gap-2">
+        <button type="button" onclick="closeEditModal()" class="px-4 py-2 border rounded-xl font-bold text-xs text-gray-600">বাতিল</button>
+        <button type="button" onclick="saveOrderEdits()" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">
+          সংরক্ষণ ও আপডেট করুন
+        </button>
+      </div>
     </div>
   </div>
 
@@ -302,6 +444,9 @@
         location.reload();
       } else if (msg.event === 'AGENT_STATUS') {
         updateAgentUI(msg.online);
+      } else if (msg.event === 'NEW_TRANSFER') {
+        playChime();
+        loadTransfers();
       }
     };
 
@@ -324,6 +469,59 @@
       }
     }
 
+    let currentEditingOrderId = null;
+
+    function openEditModal(order) {
+      if (!order) return;
+      currentEditingOrderId = order.id;
+      document.getElementById('editModalOrderId').innerText = `Order ID: #${order.id}`;
+      document.getElementById('editModalFilename').innerText = order.original_filename || 'document';
+      document.getElementById('editModalDownloadLink').href = `/admin/order/${order.id}/file`;
+      document.getElementById('editCopies').value = order.copies || 1;
+      document.getElementById('editColorMode').value = order.color_mode || 'bw';
+      document.getElementById('editPaperSize').value = order.paper_size || 'A4';
+      document.getElementById('editDuplex').value = order.duplex || 'single';
+      document.getElementById('editPageRange').value = order.page_range || 'all';
+      document.getElementById('editTotalPrice').value = order.total_price || 0;
+      document.getElementById('editPrinterTarget').value = order.printer_target || '';
+      document.getElementById('editOrderModal').classList.remove('hidden');
+    }
+
+    function closeEditModal() {
+      document.getElementById('editOrderModal').classList.add('hidden');
+      currentEditingOrderId = null;
+    }
+
+    async function saveOrderEdits() {
+      if (!currentEditingOrderId) return;
+      const payload = {
+        copies: parseInt(document.getElementById('editCopies').value, 10) || 1,
+        color_mode: document.getElementById('editColorMode').value,
+        paper_size: document.getElementById('editPaperSize').value,
+        duplex: document.getElementById('editDuplex').value,
+        page_range: document.getElementById('editPageRange').value.trim() || 'all',
+        total_price: parseFloat(document.getElementById('editTotalPrice').value) || 0,
+        printer_target: document.getElementById('editPrinterTarget').value.trim()
+      };
+      try {
+        const res = await fetch(`/admin/order/${currentEditingOrderId}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('কমান্ড সফলভাবে আপডেট করা হয়েছে!');
+          closeEditModal();
+          location.reload();
+        } else {
+          alert('আপডেট ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        }
+      } catch (e) {
+        alert('সার্ভার এরর: ' + e);
+      }
+    }
+
     function addNewOrderRow(o) {
       const emptyRow = document.getElementById('emptyRow');
       if (emptyRow) emptyRow.remove();
@@ -336,25 +534,31 @@
       tr.innerHTML = `
         <td class="px-6 py-4 font-mono font-bold text-gray-900">#${o.id}</td>
         <td class="px-6 py-4">
-          <p class="font-bold text-gray-800 truncate max-w-xs">${o.original_filename}</p>
-          <span class="text-gray-400 text-[11px]">${o.file_type.toUpperCase()}</span>
+          <p class="font-bold text-gray-800 truncate max-w-xs">${esc(o.original_filename)}</p>
+          <span class="text-gray-400 text-[11px]">${esc(String(o.file_type).toUpperCase())}</span>
         </td>
         <td class="px-6 py-4">
           <span class="font-bold">${o.page_count} পেজ</span> × ${o.copies} কপি
           <div class="text-gray-500 text-[11px]">
             ${o.color_mode === 'bw' ? 'সাদাকালো' : 'কালার'} • 
             ${o.duplex === 'single' ? 'এক পিঠ' : 'উভয় পিঠ'} • 
-            ${o.paper_size}
+            ${esc(o.paper_size)}
           </div>
         </td>
         <td class="px-6 py-4 font-bold text-sm text-gray-900">৳${o.total_price}</td>
         <td class="px-6 py-4">
-          <span class="px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold">${o.payment_method.toUpperCase()}</span>
+          <span class="px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold">${esc(String(o.payment_method).toUpperCase())}</span>
         </td>
         <td class="px-6 py-4">
           <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-yellow-100 text-yellow-800">পেমেন্ট অপেক্ষমাণ</span>
         </td>
         <td class="px-6 py-4 text-right space-x-1">
+          <a href="/admin/order/${o.id}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
+            ⬇️
+          </a>
+          <button onclick='openEditModal(${JSON.stringify(o)})' class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="কমান্ড এডিট করুন">
+            ✏️ এডিট
+          </button>
           <button onclick="approveOrder('${o.id}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
             প্রিন্ট অনুমোদন
           </button>
@@ -391,6 +595,122 @@
         alert('ত্রুটি ঘটেছে। আবার চেষ্টা করুন।');
       }
     }
+
+
+    // ── helpers ──
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function fmtTime(iso) {
+      const d = new Date(iso);
+      return isNaN(d) ? '' : d.toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' });
+    }
+
+    // ── FILE TRANSFER ──
+    async function loadTransfers() {
+      try {
+        const res = await fetch('/admin/transfers');
+        if (!res.ok) return;
+        const { transfers } = await res.json();
+        renderInbox(transfers.filter((t) => t.direction === 'to_shop'));
+        renderOutbox(transfers.filter((t) => t.direction === 'to_customer'));
+      } catch (e) { console.log('transfer load error', e); }
+    }
+
+    function renderInbox(list) {
+      document.getElementById('inboxCount').innerText = list.length;
+      const box = document.getElementById('inboxList');
+      if (!list.length) {
+        box.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">কোনো ফাইল আসেনি। কাস্টমার পেজের "ফাইল ট্রান্সফার" ট্যাব থেকে ফাইল পাঠাবে।</p>';
+        return;
+      }
+      box.innerHTML = list.map((t) => `
+        <div class="border rounded-xl p-3 flex items-start justify-between gap-2 hover:bg-gray-50">
+          <div class="min-w-0">
+            <p class="font-bold text-sm text-gray-900 truncate">${esc(t.filename)}</p>
+            <p class="text-[11px] text-gray-500">${esc(t.size_text)} • ${esc(t.sender_name || 'অজানা')} • ${fmtTime(t.created_at)}</p>
+            ${t.note ? `<p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">📝 ${esc(t.note)}</p>` : ''}
+            <p class="text-[10px] text-gray-400 font-mono mt-0.5">ID: ${esc(t.id)} • ডাউনলোড: ${t.download_count} বার</p>
+          </div>
+          <div class="flex flex-col gap-1 shrink-0">
+            <a href="/admin/transfer/${esc(t.id)}/download" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-bold text-center">⬇️ নামান</a>
+            <button onclick="deleteTransfer('${esc(t.id)}')" class="px-2.5 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded text-xs font-bold">মুছুন</button>
+          </div>
+        </div>`).join('');
+    }
+
+    function renderOutbox(list) {
+      const box = document.getElementById('outboxList');
+      if (!list.length) {
+        box.innerHTML = '<p class="text-xs text-gray-400 text-center py-3">এখনো কোনো ফাইল পাঠানো হয়নি।</p>';
+        return;
+      }
+      box.innerHTML = list.map((t) => `
+        <div class="border rounded-lg p-2 flex items-center justify-between gap-2 text-xs">
+          <div class="min-w-0">
+            <p class="font-bold truncate">${esc(t.filename)}</p>
+            <p class="text-[10px] text-gray-500 font-mono">কোড: ${esc(t.id)} • ${esc(t.size_text)} • ডাউনলোড ${t.download_count}${t.one_time ? ' • একবার' : ''}</p>
+          </div>
+          <div class="flex gap-1 shrink-0">
+            <button onclick='showShare(${JSON.stringify({ id: t.id, url: t.url, qr_url: t.qr_url })})' class="px-2 py-1 bg-pink-50 text-pink-700 rounded font-bold">QR</button>
+            <button onclick="deleteTransfer('${esc(t.id)}')" class="px-2 py-1 bg-gray-100 text-red-600 rounded font-bold">মুছুন</button>
+          </div>
+        </div>`).join('');
+    }
+
+    async function deleteTransfer(id) {
+      if (!confirm('ফাইলটি স্থায়ীভাবে মুছে ফেলবেন?')) return;
+      await fetch(`/admin/transfer/${id}/delete`, { method: 'POST' });
+      loadTransfers();
+    }
+
+    function showShare(t) {
+      document.getElementById('shareQr').src = t.qr_url + '?t=' + Date.now();
+      document.getElementById('shareCode').innerText = t.id;
+      document.getElementById('shareLink').value = t.url;
+      document.getElementById('shareResult').classList.remove('hidden');
+    }
+    function copyShareLink() {
+      navigator.clipboard.writeText(document.getElementById('shareLink').value);
+      alert('লিংক কপি করা হয়েছে!');
+    }
+
+    document.getElementById('btnSendFile').addEventListener('click', () => {
+      const f = document.getElementById('sendFileInput').files[0];
+      if (!f) { alert('আগে একটি ফাইল বাছাই করুন।'); return; }
+      if (f.size > 50 * 1024 * 1024) { alert('ফাইলের সাইজ সর্বোচ্চ ৫০ MB।'); return; }
+
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('note', document.getElementById('sendNoteInput').value.trim());
+      fd.append('one_time', document.getElementById('sendOneTime').checked ? 1 : 0);
+
+      const prog = document.getElementById('sendProgress');
+      const bar = document.getElementById('sendBar');
+      const btn = document.getElementById('btnSendFile');
+      prog.classList.remove('hidden'); bar.style.width = '0%'; btn.disabled = true;
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/admin/transfer/upload');
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = Math.round(e.loaded / e.total * 100) + '%'; };
+      xhr.onload = () => {
+        prog.classList.add('hidden'); btn.disabled = false;
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 200 && data.success) {
+          showShare(data.transfer);
+          document.getElementById('sendFileInput').value = '';
+          document.getElementById('sendNoteInput').value = '';
+          loadTransfers();
+        } else {
+          alert(data.detail || 'ফাইল আপলোড ব্যর্থ হয়েছে।');
+        }
+      };
+      xhr.onerror = () => { prog.classList.add('hidden'); btn.disabled = false; alert('সার্ভারে সংযোগ পাওয়া যায়নি।'); };
+      xhr.send(fd);
+    });
+
+    loadTransfers();
 
     function openSettingsModal() { document.getElementById('settingsModal').classList.remove('hidden'); }
     function closeSettingsModal() { document.getElementById('settingsModal').classList.add('hidden'); }

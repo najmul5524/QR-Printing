@@ -35,6 +35,7 @@ def init_db():
         rate_color_single REAL DEFAULT 10.0,
         rate_color_double REAL DEFAULT 18.0,
         rate_photo_4x6 REAL DEFAULT 30.0,
+        rate_photo_a4 REAL DEFAULT 40.0,
         is_active INTEGER DEFAULT 1,
         created_at TEXT NOT NULL
     );
@@ -79,6 +80,56 @@ def init_db():
     );
     """)
     
+    # Migration: add printer_target to orders table if not present
+    order_cols = [r[1] for r in cursor.execute("PRAGMA table_info(orders)").fetchall()]
+    if "printer_target" not in order_cols:
+        cursor.execute("ALTER TABLE orders ADD COLUMN printer_target TEXT DEFAULT ''")
+
+    # Migration: older databases do not have the A4 photo-sheet rate yet
+    cols = [r[1] for r in cursor.execute("PRAGMA table_info(shops)").fetchall()]
+    if "rate_photo_a4" not in cols:
+        cursor.execute("ALTER TABLE shops ADD COLUMN rate_photo_a4 REAL DEFAULT 40.0")
+
+    # 4. File Transfers Table (customer -> shop inbox, shop -> customer share links)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transfers (
+        id TEXT PRIMARY KEY,
+        shop_id INTEGER NOT NULL,
+        direction TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        stored_path TEXT NOT NULL,
+        file_size INTEGER DEFAULT 0,
+        sender_name TEXT,
+        note TEXT,
+        one_time INTEGER DEFAULT 0,
+        download_count INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (shop_id) REFERENCES shops (id)
+    );
+    """)
+
+    # 5. QR transfer rooms (phone <-> PC, no login needed)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transfer_rooms (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS room_files (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        stored_path TEXT NOT NULL,
+        file_size INTEGER DEFAULT 0,
+        uploader TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (room_id) REFERENCES transfer_rooms (id)
+    );
+    """)
+
     conn.commit()
     
     # Seed a demo shop if no shops exist
@@ -128,14 +179,10 @@ def get_shop_by_api_key(api_key: str) -> Optional[sqlite3.Row]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE api_key = ? AND is_active = 1", (api_key,))
     shop = cursor.fetchone()
-    if not shop:
-        # Fallback for demo keys, common keys, or local config keys
-        if api_key in ["qsp_demo_satata_101", "qsp_9a3fb73ef278688c19b8e706", "qsp_2566a965be6697c5ea5cb0fa", "qsp_demo_key_here"] or api_key.startswith("qsp_"):
-            cursor.execute("SELECT * FROM shops WHERE shop_code = 'demo101' AND is_active = 1")
-            shop = cursor.fetchone()
-            if not shop:
-                cursor.execute("SELECT * FROM shops WHERE is_active = 1 LIMIT 1")
-                shop = cursor.fetchone()
+    if not shop and api_key == "qsp_demo_satata_101":
+        # Always fallback to demo shop if master demo key is used
+        cursor.execute("SELECT * FROM shops WHERE shop_code = 'demo101' AND is_active = 1")
+        shop = cursor.fetchone()
     conn.close()
     return shop
 
@@ -161,7 +208,8 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         rate_bw_double = ?,
         rate_color_single = ?,
         rate_color_double = ?,
-        rate_photo_4x6 = ?
+        rate_photo_4x6 = ?,
+        rate_photo_a4 = ?
     WHERE id = ?
     """, (
         data.get("name"),
@@ -174,6 +222,7 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         data.get("rate_color_single", 10.0),
         data.get("rate_color_double", 18.0),
         data.get("rate_photo_4x6", 30.0),
+        data.get("rate_photo_a4", 40.0),
         shop_id
     ))
     conn.commit()
@@ -222,6 +271,23 @@ def get_order(order_id: str) -> Optional[sqlite3.Row]:
     conn.close()
     return order
 
+def update_order_details(order_id: str, updates: Dict[str, Any]):
+    """Allows shop admin to edit print parameters (copies, color, paper_size, page_range, printer_target, total_price, etc.)"""
+    allowed_keys = {
+        "copies", "color_mode", "paper_size", "duplex", "page_range",
+        "total_price", "printer_target", "customer_name"
+    }
+    filtered = {k: v for k, v in updates.items() if k in allowed_keys}
+    if not filtered:
+        return
+    set_clause = ", ".join([f"{k} = ?" for k in filtered.keys()])
+    values = list(filtered.values()) + [order_id]
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE orders SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
 def update_order_status(order_id: str, status: str, printed_at: Optional[str] = None):
     conn = get_db()
     cursor = conn.cursor()
@@ -258,3 +324,128 @@ def get_shop_stats(shop_id: int) -> Dict[str, Any]:
         "today_revenue": today_stats["today_revenue"]
     }
 
+
+# ── File transfer helpers ──
+def create_transfer(t: Dict[str, Any]) -> str:
+    conn = get_db()
+    conn.execute("""
+    INSERT INTO transfers (
+        id, shop_id, direction, original_filename, stored_path, file_size,
+        sender_name, note, one_time, created_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        t["id"], t["shop_id"], t["direction"], t["original_filename"], t["stored_path"],
+        t.get("file_size", 0), t.get("sender_name", ""), t.get("note", ""),
+        1 if t.get("one_time") else 0, t["created_at"], t["expires_at"]
+    ))
+    conn.commit()
+    conn.close()
+    return t["id"]
+
+
+def get_transfer(transfer_id: str) -> Optional[sqlite3.Row]:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def list_shop_transfers(shop_id: int, limit: int = 100) -> List[sqlite3.Row]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM transfers WHERE shop_id = ? ORDER BY created_at DESC LIMIT ?",
+        (shop_id, limit)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def count_transfers(shop_id: int, direction: str) -> int:
+    conn = get_db()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM transfers WHERE shop_id = ? AND direction = ?", (shop_id, direction)
+    ).fetchone()[0]
+    conn.close()
+    return n
+
+
+def increment_transfer_download(transfer_id: str):
+    conn = get_db()
+    conn.execute("UPDATE transfers SET download_count = download_count + 1 WHERE id = ?", (transfer_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_transfer_row(transfer_id: str):
+    conn = get_db()
+    conn.execute("DELETE FROM transfers WHERE id = ?", (transfer_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_expired_transfers(now_iso: str) -> List[sqlite3.Row]:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM transfers WHERE expires_at < ?", (now_iso,)).fetchall()
+    conn.close()
+    return rows
+
+
+# ── QR transfer rooms ──
+def create_room(room_id: str, created_at: str, expires_at: str):
+    conn = get_db()
+    conn.execute("INSERT INTO transfer_rooms (id, created_at, expires_at) VALUES (?, ?, ?)", (room_id, created_at, expires_at))
+    conn.commit()
+    conn.close()
+
+
+def get_room(room_id: str) -> Optional[sqlite3.Row]:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM transfer_rooms WHERE id = ?", (room_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def delete_room(room_id: str):
+    conn = get_db()
+    conn.execute("DELETE FROM room_files WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM transfer_rooms WHERE id = ?", (room_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_expired_rooms(now_iso: str) -> List[sqlite3.Row]:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM transfer_rooms WHERE expires_at < ?", (now_iso,)).fetchall()
+    conn.close()
+    return rows
+
+
+def add_room_file(f: Dict[str, Any]):
+    conn = get_db()
+    conn.execute("""
+    INSERT INTO room_files (id, room_id, original_filename, stored_path, file_size, uploader, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (f["id"], f["room_id"], f["original_filename"], f["stored_path"], f["file_size"], f.get("uploader", ""), f["created_at"]))
+    conn.commit()
+    conn.close()
+
+
+def list_room_files(room_id: str) -> List[sqlite3.Row]:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM room_files WHERE room_id = ? ORDER BY created_at DESC", (room_id,)).fetchall()
+    conn.close()
+    return rows
+
+
+def get_room_file(file_id: str) -> Optional[sqlite3.Row]:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM room_files WHERE id = ?", (file_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def delete_room_file(file_id: str):
+    conn = get_db()
+    conn.execute("DELETE FROM room_files WHERE id = ?", (file_id,))
+    conn.commit()
+    conn.close()

@@ -30,15 +30,24 @@
 
   <main class="max-w-lg mx-auto px-4 py-4 space-y-4">
 
-    <!-- Print Mode Switcher (Normal Document vs NID Card) -->
-    <div class="bg-white p-1.5 rounded-2xl border border-gray-200 shadow-sm flex gap-1">
-      <button type="button" id="tabDocMode" class="flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow">
-        📄 সাধারণ ডকুমেন্ট / ফটো
+    <!-- Mode Switcher: Document / NID / Photo studio / File transfer -->
+    <div class="bg-white p-1.5 rounded-2xl border border-gray-200 shadow-sm grid grid-cols-2 sm:grid-cols-4 gap-1">
+      <button type="button" id="tabDocMode" class="py-2 rounded-xl font-bold text-[11px] sm:text-xs transition bg-pink-600 text-white shadow">
+        📄 ডকুমেন্ট / ফটো
       </button>
-      <button type="button" id="tabNidMode" class="flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900">
-        🪪 NID কার্ড (২ পিঠ একসাথে)
+      <button type="button" id="tabNidMode" class="py-2 rounded-xl font-bold text-[11px] sm:text-xs transition text-gray-600 hover:text-gray-900">
+        🪪 NID / ID কার্ড
+      </button>
+      <button type="button" id="tabStudioMode" class="py-2 rounded-xl font-bold text-[11px] sm:text-xs transition text-gray-600 hover:text-gray-900">
+        📷 ফটো স্টুডিও
+      </button>
+      <button type="button" id="tabTransferMode" class="py-2 rounded-xl font-bold text-[11px] sm:text-xs transition text-gray-600 hover:text-gray-900">
+        📤 ফাইল ট্রান্সফার
       </button>
     </div>
+
+    <!-- ═════════ PRINT FLOW (steps 1-3) ═════════ -->
+    <div id="printFlow" class="space-y-4">
 
     <!-- Step 1: Upload Box -->
     <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm" id="uploadCard">
@@ -64,7 +73,8 @@
           <!-- Front Side -->
           <div id="nidFrontBox" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-4 bg-gray-50 hover:bg-pink-50/20 cursor-pointer">
             <input type="file" id="nidFrontInput" accept="image/*" class="hidden">
-            <div class="text-2xl mb-1">🪪</div>
+            <img id="nidFrontThumb" class="hidden w-full h-16 object-cover rounded-lg mb-1 border" alt="">
+            <div class="text-2xl mb-1" id="nidFrontIcon">🪪</div>
             <p class="font-bold text-xs text-gray-800">১. সামনের পিঠ</p>
             <span class="text-[10px] text-gray-400" id="nidFrontLabel">ছবি তুলুন/বাছুন</span>
           </div>
@@ -72,7 +82,8 @@
           <!-- Back Side -->
           <div id="nidBackBox" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-4 bg-gray-50 hover:bg-pink-50/20 cursor-pointer">
             <input type="file" id="nidBackInput" accept="image/*" class="hidden">
-            <div class="text-2xl mb-1">🔄</div>
+            <img id="nidBackThumb" class="hidden w-full h-16 object-cover rounded-lg mb-1 border" alt="">
+            <div class="text-2xl mb-1" id="nidBackIcon">🔄</div>
             <p class="font-bold text-xs text-gray-800">২. পেছনের পিঠ</p>
             <span class="text-[10px] text-gray-400" id="nidBackLabel">ছবি তুলুন/বাছুন</span>
           </div>
@@ -107,10 +118,21 @@
           <button type="button" id="btnOpenPreview" class="px-2.5 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition">
             <span>👁️</span> <span>প্রিভিউ</span>
           </button>
-          <button type="button" id="btnTransferFile" class="px-2.5 py-1.5 bg-gray-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition" title="অন্য ডিভাইসে পাঠানোর লিংক কপি করুন">
-            <span>↗</span> <span>ট্রান্সফার</span>
-          </button>
           <button type="button" id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg font-bold" title="মুছে ফেলুন">&times;</button>
+        </div>
+      </div>
+
+      <!-- NID live preview (real A4 sheet, exact card size) -->
+      <div id="nidInlinePreview" class="hidden mt-3 space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-bold text-gray-700">📐 প্রিন্ট প্রিভিউ (A4 পেজ, কার্ড আসল মাপে ৮৫.৬×৫৪ মিমি)</span>
+        </div>
+        <div class="bg-gray-100 rounded-xl p-2 border">
+          <img id="nidInlineImg" src="" alt="NID preview" class="w-full max-h-[420px] object-contain rounded-lg bg-white shadow border">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="button" id="btnRotFront" class="py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs font-bold text-gray-700">↻ সামনের ছবি ঘোরান</button>
+          <button type="button" id="btnRotBack" class="py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs font-bold text-gray-700">↻ পেছনের ছবি ঘোরান</button>
         </div>
       </div>
     </div>
@@ -164,6 +186,23 @@
               <input type="radio" name="pages_per_sheet" value="4" class="hidden">
               <p class="text-xs font-bold">৪ পাতা / শিট</p>
               <span class="text-[10px] text-green-600 font-bold">১/৪ খরচ!</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- NID only: how to fit the photo inside the card -->
+        <div id="nidFitWrapper" class="hidden">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">ছবি কার্ডে কীভাবে বসবে</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="border-2 rounded-xl p-2.5 cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optFitCover">
+              <input type="radio" name="nid_fit" value="cover" checked class="hidden">
+              <p class="text-sm font-bold">✂️ কার্ড ভরে (Crop)</p>
+              <p class="text-[10px] text-gray-500">কিনারা সামান্য কাটতে পারে</p>
+            </label>
+            <label class="border-2 rounded-xl p-2.5 cursor-pointer border-gray-200 text-gray-700" id="optFitContain">
+              <input type="radio" name="nid_fit" value="contain" class="hidden">
+              <p class="text-sm font-bold">🖼️ পুরো ছবি (Fit)</p>
+              <p class="text-[10px] text-gray-500">কিছু কাটা যাবে না</p>
             </label>
           </div>
         </div>
@@ -227,6 +266,109 @@
             <span>👁️</span>
             <span>প্রিন্ট কেমন দেখাবে প্রিভিউ দেখুন (Print Preview)</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Photo Studio settings (shown only in the Photo Studio tab) -->
+    <div id="studioCard" class="hidden bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-4 opacity-60 pointer-events-none">
+      <h2 class="font-bold text-gray-800 text-base flex items-center gap-2">
+        <span class="bg-gray-100 w-6 h-6 rounded-full flex items-center justify-center text-xs">২</span> ছবি এডিট ও সাজান
+      </h2>
+
+      <!-- live sheet preview -->
+      <div class="bg-gray-100 rounded-xl p-2 border">
+        <div class="flex items-center justify-between text-[11px] px-1 pb-1">
+          <span class="font-bold text-gray-600">📐 প্রিন্ট প্রিভিউ</span>
+          <span id="studioInfo" class="font-bold text-pink-700"></span>
+        </div>
+        <img id="studioPreviewImg" src="" alt="preview" class="w-full max-h-[460px] object-contain rounded-lg bg-white shadow border">
+      </div>
+
+      <!-- sizes -->
+      <div class="space-y-2">
+        <label class="block text-xs font-semibold text-gray-600">ছবির সাইজ ও সংখ্যা (সর্বোচ্চ ৩ ধরনের ছবি একসাথে)</label>
+        <div id="studioItems" class="space-y-2"></div>
+        <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
+          <input type="checkbox" id="studioFill" class="w-4 h-4"> পেজ পুরো ভরে ফেলুন (প্রথম সাইজের ছবি যত ধরে)
+        </label>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">পেপার</label>
+          <select id="studioPaper" class="w-full px-3 py-2 border rounded-lg text-sm bg-white">
+            <option value="A4">A4 পেপার</option>
+            <option value="4x6">৪×৬ ইঞ্চি ফটো পেপার</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">রঙ</label>
+          <select id="studioBw" class="w-full px-3 py-2 border rounded-lg text-sm bg-white">
+            <option value="0">রঙিন</option>
+            <option value="1">সাদাকালো</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- tone -->
+      <div class="space-y-2">
+        <div>
+          <div class="flex justify-between text-xs"><span class="font-semibold text-gray-600">☀️ ব্রাইটনেস</span><span id="valBrightness" class="font-mono text-gray-500">0</span></div>
+          <input type="range" id="studioBrightness" min="-60" max="60" value="0" class="w-full accent-pink-600">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs"><span class="font-semibold text-gray-600">◐ কনট্রাস্ট</span><span id="valContrast" class="font-mono text-gray-500">0</span></div>
+          <input type="range" id="studioContrast" min="-60" max="60" value="0" class="w-full accent-pink-600">
+        </div>
+      </div>
+
+      <!-- background -->
+      <div class="space-y-2">
+        <label class="block text-xs font-semibold text-gray-600">🎨 ব্যাকগ্রাউন্ড পরিবর্তন</label>
+        <div class="flex flex-wrap gap-2 items-center" id="studioBgBtns">
+          <button type="button" data-bg="none" class="bg-chip px-3 py-1.5 rounded-lg border-2 border-pink-600 bg-pink-50 text-xs font-bold">আসল</button>
+          <button type="button" data-bg="#ffffff" class="bg-chip w-8 h-8 rounded-full border-2 border-gray-300" style="background:#ffffff" title="সাদা"></button>
+          <button type="button" data-bg="#1e5bb8" class="bg-chip w-8 h-8 rounded-full border-2 border-gray-300" style="background:#1e5bb8" title="নীল"></button>
+          <button type="button" data-bg="#d32f2f" class="bg-chip w-8 h-8 rounded-full border-2 border-gray-300" style="background:#d32f2f" title="লাল"></button>
+          <button type="button" data-bg="#d9d9d9" class="bg-chip w-8 h-8 rounded-full border-2 border-gray-300" style="background:#d9d9d9" title="ধূসর"></button>
+          <label class="flex items-center gap-1 text-xs text-gray-600">নিজের রঙ <input type="color" id="studioBgCustom" value="#87ceeb" class="w-8 h-8 p-0 border rounded"></label>
+        </div>
+        <div id="studioTolWrap" class="hidden">
+          <div class="flex justify-between text-xs"><span class="font-semibold text-gray-600">ব্যাকগ্রাউন্ড ধরার মাত্রা</span><span id="valTol" class="font-mono text-gray-500">45</span></div>
+          <input type="range" id="studioTol" min="10" max="100" value="45" class="w-full accent-pink-600">
+          <p class="text-[10px] text-gray-400">দেয়াল/পর্দা সমান রঙের হলে সবচেয়ে ভালো কাজ করে। মুখে রঙ চলে গেলে মাত্রা কমান, ব্যাকগ্রাউন্ড থেকে গেলে বাড়ান।</p>
+        </div>
+      </div>
+
+      <!-- zoom / position -->
+      <div class="space-y-2">
+        <div>
+          <div class="flex justify-between text-xs"><span class="font-semibold text-gray-600">🔍 জুম</span><span id="valZoom" class="font-mono text-gray-500">1.0×</span></div>
+          <input type="range" id="studioZoom" min="100" max="300" value="100" class="w-full accent-pink-600">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <div class="text-xs font-semibold text-gray-600">↔ বামে/ডানে</div>
+            <input type="range" id="studioOx" min="-100" max="100" value="0" class="w-full accent-pink-600">
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-gray-600">↕ উপরে/নিচে</div>
+            <input type="range" id="studioOy" min="-100" max="100" value="0" class="w-full accent-pink-600">
+          </div>
+        </div>
+      </div>
+
+      <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
+        <input type="checkbox" id="studioBorder" checked class="w-4 h-4"> কাটার জন্য ছবির চারপাশে হালকা দাগ দিন
+      </label>
+
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">শিট সংখ্যা (কপি)</label>
+        <div class="flex items-center gap-3">
+          <button type="button" id="btnStudioMinus" class="w-9 h-9 rounded-lg bg-gray-100 font-bold text-lg">−</button>
+          <input type="number" id="studioCopies" value="1" min="1" max="100" class="w-16 text-center border rounded-lg py-1.5 font-bold" readonly>
+          <button type="button" id="btnStudioPlus" class="w-9 h-9 rounded-lg bg-gray-100 font-bold text-lg">+</button>
         </div>
       </div>
     </div>
@@ -302,11 +444,62 @@
       </div>
     </div>
 
+    </div><!-- /printFlow -->
+
+    <!-- ═════════ FILE TRANSFER ═════════ -->
+    <div id="transferFlow" class="hidden space-y-4">
+
+      <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+        <div>
+          <h2 class="font-bold text-gray-800 text-base">📤 দোকানে ফাইল পাঠান</h2>
+          <p class="text-xs text-gray-500 mt-0.5">যেকোনো ফাইল (Word, Excel, ZIP, ছবি, PDF...) সরাসরি দোকানদারের কম্পিউটারে পাঠান। প্রিন্ট না করেও পাঠানো যায়।</p>
+        </div>
+
+        <div id="trDropzone" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-6 text-center cursor-pointer transition bg-gray-50">
+          <input type="file" id="trFileInput" class="hidden">
+          <div class="text-3xl mb-1">📁</div>
+          <p class="font-bold text-gray-700 text-sm" id="trFileLabel">ফাইল বাছাই করতে ক্লিক করুন</p>
+          <p class="text-xs text-gray-400 mt-1">সর্বোচ্চ ৫০ MB • ২৪ ঘণ্টা পর স্বয়ংক্রিয়ভাবে মুছে যাবে</p>
+        </div>
+
+        <input type="text" id="trNameInput" maxlength="60" placeholder="আপনার নাম (ঐচ্ছিক)" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+        <input type="text" id="trNoteInput" maxlength="300" placeholder="দোকানদারের জন্য নোট (ঐচ্ছিক) — যেমন: ২ কপি প্রিন্ট দেবেন" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+
+        <div id="trProgress" class="hidden space-y-1">
+          <div class="flex justify-between text-xs text-gray-500"><span>আপলোড হচ্ছে...</span><span id="trPercent">0%</span></div>
+          <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden"><div id="trBar" class="bg-pink-600 h-full w-0 transition-all duration-300"></div></div>
+        </div>
+
+        <button type="button" id="btnTrSend" class="w-full py-3 bg-gradient-to-r from-pink-600 to-orange-500 text-white font-bold rounded-xl shadow-lg shadow-pink-500/25 text-sm">
+          📤 ফাইল পাঠিয়ে দিন
+        </button>
+
+        <div id="trSuccess" class="hidden p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-900 space-y-1">
+          <p class="font-bold">✅ ফাইল সফলভাবে পাঠানো হয়েছে!</p>
+          <p class="text-xs">ট্রান্সফার আইডি: <span class="font-mono font-bold" id="trSuccessId"></span></p>
+          <p class="text-xs">দোকানদার তার ড্যাশবোর্ড থেকে ফাইলটি পাবেন।</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-2">
+        <h2 class="font-bold text-gray-800 text-base">📥 দোকান থেকে ফাইল নিন</h2>
+        <p class="text-xs text-gray-500">দোকানদার আপনাকে কিউআর কোড বা ৮ অক্ষরের কোড দিলে এখানে লিখুন (অথবা কিউআর স্ক্যান করুন)।</p>
+        <div class="flex gap-2">
+          <input type="text" id="trCodeInput" maxlength="8" placeholder="যেমন: A1B2C3D4" class="flex-1 px-3 py-2 border rounded-lg text-sm font-mono uppercase outline-none">
+          <button type="button" id="btnTrGet" class="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-bold">ফাইল দেখুন</button>
+        </div>
+      </div>
+
+      <a href="/transfer" class="block bg-gradient-to-r from-gray-900 to-gray-700 text-white p-4 rounded-2xl shadow text-center">
+        <p class="font-bold text-sm">📲 মোবাইল ↔ পিসি ফাইল ট্রান্সফার (QR দিয়ে)</p>
+        <p class="text-xs text-gray-300 mt-0.5">দোকান ছাড়াই নিজের ডিভাইসগুলোর মধ্যে যেকোনো ফাইল পাঠান</p>
+      </a>
+    </div><!-- /transferFlow -->
+
     <!-- Print Preview Modal Dialog -->
     <div id="previewModalOverlay" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
-      <div class="bg-white max-w-lg w-full max-h-[92vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in border border-gray-100">
-        
-        <!-- Modal Header -->
+      <div class="bg-white max-w-lg w-full max-h-[92vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
+
         <div class="px-4 py-3 bg-gray-900 text-white flex items-center justify-between">
           <div class="flex items-center gap-2">
             <span class="text-lg">👁️</span>
@@ -318,51 +511,32 @@
           <button type="button" id="btnClosePreviewModal" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1">&times;</button>
         </div>
 
-        <!-- Sizing & Guidelines Banner -->
-        <div id="previewInfoBanner" class="bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 px-4 py-2 text-xs flex items-center justify-between">
-          <div class="flex items-center gap-1.5 text-pink-900 font-bold" id="previewDimensionBadge">
-            <span>📐</span> <span id="previewDimensionText">আসল NID মাপ: ৮৫.৬ মিমি × ৫৪.০ মিমি</span>
+        <div class="bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 px-4 py-2 text-xs flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5 text-pink-900 font-bold">
+            <span>📐</span> <span id="previewDimensionText"></span>
           </div>
-          <div class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700" id="previewModeBadge">
-            রঙিন (Color)
-          </div>
+          <div class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700 shrink-0" id="previewModeBadge">রঙিন (Color)</div>
         </div>
 
-        <!-- Preview Viewport -->
-        <div class="flex-1 overflow-auto p-4 bg-gray-100 flex items-center justify-center min-h-[320px] max-h-[58vh] relative">
-          <!-- Image Preview Container (for NID & Photos) -->
-          <div id="previewImgContainer" class="w-full flex flex-col items-center justify-center">
-            <img id="previewImg" src="" alt="Print Preview" class="max-w-full max-h-[52vh] object-contain rounded-lg shadow-md border bg-white transition duration-200">
-            <p class="text-[11px] text-gray-600 mt-2 text-center font-medium" id="previewGuideNote">
-              ✂️ ড্যাশ লাইন বরাবর কাটুন এবং মাঝখান দিয়ে ভাঁজ করে লেমিনেটিং করুন
-            </p>
-          </div>
-
-          <!-- PDF Preview Container -->
-          <div id="previewPdfContainer" class="w-full h-full min-h-[360px] hidden flex flex-col">
-            <iframe id="previewPdfFrame" src="" class="w-full h-[52vh] rounded-lg border bg-white shadow-inner"></iframe>
-            <p class="text-[11px] text-gray-500 mt-1 text-center font-medium">
-              📄 ডকুমেন্টের পাতাগুলো স্ক্রল করে দেখুন
-            </p>
-          </div>
+        <div class="flex-1 overflow-auto p-3 bg-gray-200 min-h-[320px]" id="previewScroll">
+          <p id="previewLoading" class="text-center text-xs text-gray-500 py-10">প্রিভিউ তৈরি হচ্ছে...</p>
+          <div id="previewPages" class="space-y-4"></div>
+          <iframe id="previewPdfFrame" src="" class="hidden w-full h-[60vh] rounded-lg border bg-white"></iframe>
+          <p class="text-[11px] text-gray-600 mt-3 text-center font-medium" id="previewGuideNote"></p>
         </div>
 
-        <!-- Modal Footer -->
         <div class="p-3.5 bg-white border-t flex items-center justify-between gap-2">
           <div class="text-xs">
             <span class="text-gray-400 block text-[10px]">মোট প্রিন্ট খরচ</span>
             <span class="text-base font-black text-pink-600" id="previewModalTotal">৳ 0</span>
           </div>
           <div class="flex items-center gap-2">
-            <button type="button" id="btnClosePreviewBtn" class="px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition">
-              বন্ধ করুন
-            </button>
-            <button type="button" id="btnConfirmFromPreview" class="px-4 py-2 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow hover:opacity-95 transition flex items-center gap-1.5">
-              <span>সব ঠিক আছে, এগিয়ে যান</span> <span>➔</span>
+            <button type="button" id="btnClosePreviewBtn" class="px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition">বন্ধ করুন</button>
+            <button type="button" id="btnConfirmFromPreview" class="px-4 py-2 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow hover:opacity-95 transition">
+              সব ঠিক আছে ➔
             </button>
           </div>
         </div>
-
       </div>
     </div>
 
@@ -412,562 +586,18 @@
 
   <script>
     const SHOP_ID = {{ shop.id }};
-    const BKASH_NUM = "{{ shop.bkash_number }}";
-    const NAGAD_NUM = "{{ shop.nagad_number }}";
+    const SHOP_CODE = "{{ shop.shop_code }}";
+    const BKASH_NUM = "{{ shop.bkash_number or '' }}";
+    const NAGAD_NUM = "{{ shop.nagad_number or '' }}";
     const RATES = {
       bw_single: {{ shop.rate_bw_single }},
       bw_double: {{ shop.rate_bw_double }},
       color_single: {{ shop.rate_color_single }},
       color_double: {{ shop.rate_color_double }},
-      photo_4x6: {{ shop.rate_photo_4x6 }}
+      photo_4x6: {{ shop.rate_photo_4x6 }},
+      photo_a4: {{ shop.rate_photo_a4 }}
     };
-
-    let currentMode = 'document'; // 'document' or 'nid'
-    let uploadedFile = null;
-    let nidFrontFile = null;
-    let nidBackFile = null;
-
-    // Mode Switcher Elements
-    const tabDocMode = document.getElementById('tabDocMode');
-    const tabNidMode = document.getElementById('tabNidMode');
-    const dropzoneNormal = document.getElementById('dropzoneNormal');
-    const dropzoneNid = document.getElementById('dropzoneNid');
-    const nupWrapper = document.getElementById('nupWrapper');
-    const paperTypeWrapper = document.getElementById('paperTypeWrapper');
-    const duplexWrapper = document.getElementById('duplexWrapper');
-    const step1Title = document.getElementById('step1Title');
-
-    // NID Elements
-    const nidFrontBox = document.getElementById('nidFrontBox');
-    const nidBackBox = document.getElementById('nidBackBox');
-    const nidFrontInput = document.getElementById('nidFrontInput');
-    const nidBackInput = document.getElementById('nidBackInput');
-    const nidFrontLabel = document.getElementById('nidFrontLabel');
-    const nidBackLabel = document.getElementById('nidBackLabel');
-    const btnMergeNid = document.getElementById('btnMergeNid');
-
-    // Normal Elements
-    const fileInput = document.getElementById('fileInput');
-    const uploadProgress = document.getElementById('uploadProgress');
-    const progressBar = document.getElementById('progressBar');
-    const progressPercent = document.getElementById('progressPercent');
-    const fileInfoBadge = document.getElementById('fileInfoBadge');
-    const fileNameText = document.getElementById('fileNameText');
-    const fileMetaText = document.getElementById('fileMetaText');
-    const btnRemoveFile = document.getElementById('btnRemoveFile');
-    const btnTransferFile = document.getElementById('btnTransferFile');
-
-    const settingsCard = document.getElementById('settingsCard');
-    const paymentCard = document.getElementById('paymentCard');
-
-    const inputCopies = document.getElementById('inputCopies');
-    const btnMinusCopy = document.getElementById('btnMinusCopy');
-    const btnPlusCopy = document.getElementById('btnPlusCopy');
-    const totalPriceText = document.getElementById('totalPriceText');
-    const billSummaryText = document.getElementById('billSummaryText');
-
-    const mfsDetailsBox = document.getElementById('mfsDetailsBox');
-    const mfsInstruction = document.getElementById('mfsInstruction');
-    const mfsNumber = document.getElementById('mfsNumber');
-
-    // Mode switching handler
-    tabDocMode.addEventListener('click', () => {
-      currentMode = 'document';
-      tabDocMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow';
-      tabNidMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900';
-      dropzoneNormal.classList.remove('hidden');
-      dropzoneNid.classList.add('hidden');
-      step1Title.innerText = 'ডকুমেন্ট বা ছবি সিলেক্ট করুন';
-      paperTypeWrapper.classList.remove('hidden');
-      nupWrapper.classList.remove('hidden');
-      duplexWrapper.classList.remove('hidden');
-      resetUploads();
-    });
-
-    tabNidMode.addEventListener('click', () => {
-      currentMode = 'nid';
-      tabNidMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition bg-pink-600 text-white shadow';
-      tabDocMode.className = 'flex-1 py-2 rounded-xl font-bold text-xs md:text-sm transition text-gray-600 hover:text-gray-900';
-      dropzoneNormal.classList.add('hidden');
-      dropzoneNid.classList.remove('hidden');
-      step1Title.innerText = 'NID কার্ডের ২ পিঠের ছবি দিন';
-      paperTypeWrapper.classList.add('hidden');
-      nupWrapper.classList.add('hidden');
-      duplexWrapper.classList.add('hidden');
-      resetUploads();
-    });
-
-    function resetUploads() {
-      uploadedFile = null;
-      nidFrontFile = null;
-      nidBackFile = null;
-      nidFrontLabel.innerText = 'ছবি তুলুন/বাছুন';
-      nidBackLabel.innerText = 'ছবি তুলুন/বাছুন';
-      btnMergeNid.disabled = true;
-      btnMergeNid.className = 'w-full py-2.5 bg-gray-200 text-gray-500 font-bold text-xs rounded-xl transition cursor-not-allowed';
-      fileInfoBadge.classList.add('hidden');
-      fileInput.value = '';
-      nidFrontInput.value = '';
-      nidBackInput.value = '';
-      settingsCard.classList.add('opacity-60', 'pointer-events-none');
-      paymentCard.classList.add('opacity-60', 'pointer-events-none');
-      totalPriceText.innerText = '৳ 0';
-    }
-
-    // NID Uploads
-    nidFrontBox.addEventListener('click', () => nidFrontInput.click());
-    nidBackBox.addEventListener('click', () => nidBackInput.click());
-
-    nidFrontInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        nidFrontFile = e.target.files[0];
-        nidFrontLabel.innerText = '✓ ' + nidFrontFile.name.substring(0, 12) + '...';
-        checkNidReady();
-      }
-    });
-
-    nidBackInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        nidBackFile = e.target.files[0];
-        nidBackLabel.innerText = '✓ ' + nidBackFile.name.substring(0, 12) + '...';
-        checkNidReady();
-      }
-    });
-
-    function checkNidReady() {
-      if (nidFrontFile && nidBackFile) {
-        btnMergeNid.disabled = false;
-        btnMergeNid.className = 'w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold text-xs rounded-xl transition shadow cursor-pointer';
-        btnMergeNid.innerText = '✨ NID সামনের ও পেছনের ছবি একসাথে প্রসেস করুন';
-      }
-    }
-
-    btnMergeNid.addEventListener('click', async () => {
-      if (!nidFrontFile || !nidBackFile) return;
-
-      dropzoneNid.classList.add('hidden');
-      uploadProgress.classList.remove('hidden');
-
-      const formData = new FormData();
-      formData.append('front', nidFrontFile);
-      formData.append('back', nidBackFile);
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload-nid', true);
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const p = Math.round((e.loaded / e.total) * 100);
-          progressBar.style.width = p + '%';
-          progressPercent.innerText = p + '%';
-        }
-      };
-
-      xhr.onload = () => {
-        uploadProgress.classList.add('hidden');
-        if (xhr.status === 200) {
-          uploadedFile = JSON.parse(xhr.responseText);
-          showUploadedFile();
-        } else {
-          let message = 'NID ছবি প্রসেসিং ব্যর্থ হয়েছে।';
-          try { message = JSON.parse(xhr.responseText).detail || message; } catch (_) {}
-          alert(message);
-          dropzoneNid.classList.remove('hidden');
-        }
-      };
-      xhr.send(formData);
-    });
-
-    // Normal File Upload
-    dropzoneNormal.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
-    });
-
-    dropzoneNormal.addEventListener('dragover', (e) => { e.preventDefault(); dropzoneNormal.classList.add('border-pink-500'); });
-    dropzoneNormal.addEventListener('dragleave', () => dropzoneNormal.classList.remove('border-pink-500'));
-    dropzoneNormal.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropzoneNormal.classList.remove('border-pink-500');
-      if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
-    });
-
-    async function handleFileUpload(file) {
-      dropzoneNormal.classList.add('hidden');
-      uploadProgress.classList.remove('hidden');
-
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload', true);
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const p = Math.round((e.loaded / e.total) * 100);
-          progressBar.style.width = p + '%';
-          progressPercent.innerText = p + '%';
-        }
-      };
-
-      xhr.onload = () => {
-        uploadProgress.classList.add('hidden');
-        if (xhr.status === 200) {
-          uploadedFile = JSON.parse(xhr.responseText);
-          showUploadedFile();
-        } else {
-          let message = 'ফাইল আপলোড ব্যর্থ হয়েছে।';
-          try { message = JSON.parse(xhr.responseText).detail || message; } catch (_) {}
-          alert(message);
-          dropzoneNormal.classList.remove('hidden');
-        }
-      };
-      xhr.send(formData);
-    }
-
-    function showUploadedFile() {
-      fileNameText.innerText = uploadedFile.original_filename;
-      fileMetaText.innerText = uploadedFile.is_nid ? 'NID কার্ড (A4 পেজে সামনে ও পেছনে সাজানো)' : `মোট পেজ: ${uploadedFile.page_count} টি`;
-      fileInfoBadge.classList.remove('hidden');
-
-      if (uploadedFile.file_type !== 'pdf' || uploadedFile.is_nid) {
-        nupWrapper.classList.add('hidden');
-      } else {
-        nupWrapper.classList.remove('hidden');
-      }
-
-      settingsCard.classList.remove('opacity-60', 'pointer-events-none');
-      paymentCard.classList.remove('opacity-60', 'pointer-events-none');
-
-      calculateBill();
-    }
-
-    async function transferUploadedFile() {
-      if (!uploadedFile) return;
-      const transferUrl = `${location.origin}/api/transfer/${encodeURIComponent(uploadedFile.file_id)}`;
-      try {
-        await navigator.clipboard.writeText(transferUrl);
-        alert('ফাইল ট্রান্সফার লিংক কপি হয়েছে। অন্য ডিভাইসে লিংকটি খুললেই ফাইল ডাউনলোড হবে।');
-      } catch (err) {
-        window.prompt('এই লিংকটি কপি করুন:', transferUrl);
-      }
-    }
-    btnTransferFile.addEventListener('click', transferUploadedFile);
-
-    btnRemoveFile.addEventListener('click', () => {
-      resetUploads();
-      if (currentMode === 'nid') {
-        dropzoneNid.classList.remove('hidden');
-      } else {
-        dropzoneNormal.classList.remove('hidden');
-      }
-    });
-
-    // Radio button handlers
-    function setupRadioGroup(groupIds, onChange) {
-      groupIds.forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener('click', () => {
-          groupIds.forEach(otherId => {
-            const o = document.getElementById(otherId);
-            if (o) {
-              o.classList.remove('border-pink-600', 'bg-pink-50', 'text-pink-900');
-              o.classList.add('border-gray-200', 'text-gray-700');
-            }
-          });
-          el.classList.add('border-pink-600', 'bg-pink-50', 'text-pink-900');
-          el.classList.remove('border-gray-200', 'text-gray-700');
-          el.querySelector('input').checked = true;
-          if (onChange) onChange();
-        });
-      });
-    }
-
-    setupRadioGroup(['optDocA4', 'optPhoto'], () => {
-      const isPhoto = document.querySelector('input[name="paper_size"]:checked').value === '4x6';
-      document.getElementById('colorModeWrapper').style.display = isPhoto ? 'none' : 'block';
-      document.getElementById('duplexWrapper').style.display = isPhoto ? 'none' : 'block';
-      document.getElementById('nupWrapper').style.display = isPhoto ? 'none' : 'block';
-      calculateBill();
-    });
-
-    setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], calculateBill);
-    setupRadioGroup(['optBw', 'optColor'], calculateBill);
-    setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
-
-    setupRadioGroup(['payMethodCash', 'payMethodBkash', 'payMethodNagad'], () => {
-      const method = document.querySelector('input[name="payment_method"]:checked').value;
-      if (method === 'bkash') {
-        mfsDetailsBox.classList.remove('hidden');
-        mfsInstruction.innerText = 'দোকানের বিকাশ নম্বরে সেন্ড মানি করুন:';
-        mfsNumber.innerText = BKASH_NUM;
-      } else if (method === 'nagad') {
-        mfsDetailsBox.classList.remove('hidden');
-        mfsInstruction.innerText = 'দোকানের নগদ নম্বরে সেন্ড মানি করুন:';
-        mfsNumber.innerText = NAGAD_NUM;
-      } else {
-        mfsDetailsBox.classList.add('hidden');
-      }
-    });
-
-    btnMinusCopy.addEventListener('click', () => {
-      let v = parseInt(inputCopies.value);
-      if (v > 1) { inputCopies.value = v - 1; calculateBill(); }
-    });
-    btnPlusCopy.addEventListener('click', () => {
-      let v = parseInt(inputCopies.value);
-      inputCopies.value = v + 1; calculateBill();
-    });
-
-    function calculateBill() {
-      if (!uploadedFile) return;
-
-      const copies = parseInt(inputCopies.value);
-      const color = document.querySelector('input[name="color_mode"]:checked').value;
-      let total = 0;
-
-      if (uploadedFile.is_nid || currentMode === 'nid') {
-        const rate = color === 'bw' ? RATES.bw_single : RATES.color_single;
-        total = rate * copies;
-        billSummaryText.innerText = `NID কার্ড (${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} সেট`;
-      } else {
-        const paperSize = document.querySelector('input[name="paper_size"]:checked').value;
-        if (paperSize === '4x6') {
-          total = RATES.photo_4x6 * copies;
-          billSummaryText.innerText = `৪×৬ পাসপোর্ট শিট × ${copies} কপি`;
-        } else {
-          const duplex = document.querySelector('input[name="duplex"]:checked').value;
-          const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
-          const nup = nupEl ? parseInt(nupEl.value) : 1;
-
-          // Effective sheet calculation with N-up
-          const effectiveSheets = Math.ceil(uploadedFile.page_count / nup);
-
-          let rate = 0;
-          if (color === 'bw') {
-            rate = duplex === 'double' ? RATES.bw_double : RATES.bw_single;
-          } else {
-            rate = duplex === 'double' ? RATES.color_double : RATES.color_single;
-          }
-          total = rate * effectiveSheets * copies;
-          billSummaryText.innerText = `${effectiveSheets} টি শিট (${nup > 1 ? nup + '-in-1' : 'স্বাভাবিক'}, ${color === 'bw' ? 'সাদাকালো' : 'রঙিন'}) × ${copies} কপি`;
-        }
-      }
-
-      totalPriceText.innerText = `৳ ${total.toFixed(2)}`;
-    }
-
-    function copyMfsNumber() {
-      navigator.clipboard.writeText(mfsNumber.innerText);
-      alert('নম্বর কপি করা হয়েছে!');
-    }
-
-    // --- PRINT PREVIEW MODAL LOGIC ---
-    const previewModalOverlay = document.getElementById('previewModalOverlay');
-    const previewModalFileName = document.getElementById('previewModalFileName');
-    const previewDimensionText = document.getElementById('previewDimensionText');
-    const previewModeBadge = document.getElementById('previewModeBadge');
-    const previewImgContainer = document.getElementById('previewImgContainer');
-    const previewImg = document.getElementById('previewImg');
-    const previewGuideNote = document.getElementById('previewGuideNote');
-    const previewPdfContainer = document.getElementById('previewPdfContainer');
-    const previewPdfFrame = document.getElementById('previewPdfFrame');
-    const previewModalTotal = document.getElementById('previewModalTotal');
-    const btnOpenPreview = document.getElementById('btnOpenPreview');
-    const btnOpenPreviewMini = document.getElementById('btnOpenPreviewMini');
-    const btnOpenPreviewBanner = document.getElementById('btnOpenPreviewBanner');
-    const btnClosePreviewModal = document.getElementById('btnClosePreviewModal');
-    const btnClosePreviewBtn = document.getElementById('btnClosePreviewBtn');
-    const btnConfirmFromPreview = document.getElementById('btnConfirmFromPreview');
-
-    function openPrintPreview() {
-      if (!uploadedFile) {
-        alert('অনুগ্রহ করে আগে ফাইল সিলেক্ট বা আপলোড করুন।');
-        return;
-      }
-
-      previewModalFileName.innerText = uploadedFile.original_filename;
-      previewModalTotal.innerText = totalPriceText.innerText;
-
-      const isNid = uploadedFile.is_nid || currentMode === 'nid';
-      const colorRadio = document.querySelector('input[name="color_mode"]:checked');
-      const color = colorRadio ? colorRadio.value : 'bw';
-      const previewUrl = uploadedFile.preview_url || `/api/preview/${uploadedFile.file_id}`;
-
-      // Color Badge & Visual Filter
-      if (color === 'bw') {
-        previewModeBadge.innerText = 'সাদাকালো (B&W)';
-        previewModeBadge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-gray-200 text-gray-800';
-        previewImg.style.filter = 'grayscale(100%) contrast(105%)';
-      } else {
-        previewModeBadge.innerText = 'রঙিন (Color)';
-        previewModeBadge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700';
-        previewImg.style.filter = 'none';
-      }
-
-      if (isNid) {
-        // NID Card Sheet: 85.60 mm x 53.98 mm exact
-        previewDimensionText.innerText = 'আসল NID মাপ: ৮৫.৬ মিমি × ৫৪.০ মিমি (১০০% আসল সাইজ)';
-        previewGuideNote.innerText = '✂️ চারপাশের ড্যাশ লাইন বরাবর কাটুন এবং মাঝখান দিয়ে ভাঁজ করে লেমিনেটিং করুন।';
-        previewGuideNote.classList.remove('hidden');
-
-        previewImgContainer.classList.remove('hidden');
-        previewPdfContainer.classList.add('hidden');
-        previewImg.src = previewUrl;
-      } else if (uploadedFile.file_type === 'image') {
-        const paperSizeRadio = document.querySelector('input[name="paper_size"]:checked');
-        const isPhoto = paperSizeRadio && paperSizeRadio.value === '4x6';
-
-        if (isPhoto) {
-          previewDimensionText.innerText = '৪×৬ ইঞ্চি পাসপোর্ট শিট (৬টি পাসপোর্ট ফটো)';
-          previewGuideNote.innerText = '✂️ ৪×৬ ফটো পেপারে ৬টি ছবি একসাথে সুন্দরভাবে সাজানো হবে।';
-        } else {
-          previewDimensionText.innerText = 'A4 প্রিন্ট পেপার সাইজ';
-          previewGuideNote.innerText = '📄 ডকুমেন্ট বা ছবি A4 পাতায় ফিট করে প্রিন্ট হবে।';
-        }
-        previewGuideNote.classList.remove('hidden');
-
-        previewImgContainer.classList.remove('hidden');
-        previewPdfContainer.classList.add('hidden');
-        previewImg.src = previewUrl;
-      } else {
-        // PDF File
-        const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
-        const nup = nupEl ? parseInt(nupEl.value) : 1;
-
-        if (nup > 1) {
-          previewDimensionText.innerText = `A4 পেপার (${nup}-in-1 মোড, ${uploadedFile.page_count} পাতা)`;
-        } else {
-          previewDimensionText.innerText = `A4 পেপার (মোট ${uploadedFile.page_count} টি পাতা)`;
-        }
-        previewGuideNote.classList.add('hidden');
-
-        previewImgContainer.classList.add('hidden');
-        previewPdfContainer.classList.remove('hidden');
-        previewPdfFrame.src = previewUrl + '#toolbar=0';
-      }
-
-      previewModalOverlay.classList.remove('hidden');
-    }
-
-    function closePrintPreview() {
-      previewModalOverlay.classList.add('hidden');
-      previewPdfFrame.src = '';
-    }
-
-    if (btnOpenPreview) btnOpenPreview.addEventListener('click', openPrintPreview);
-    if (btnOpenPreviewMini) btnOpenPreviewMini.addEventListener('click', openPrintPreview);
-    if (btnOpenPreviewBanner) btnOpenPreviewBanner.addEventListener('click', openPrintPreview);
-    if (btnClosePreviewModal) btnClosePreviewModal.addEventListener('click', closePrintPreview);
-    if (btnClosePreviewBtn) btnClosePreviewBtn.addEventListener('click', closePrintPreview);
-    previewModalOverlay.addEventListener('click', (e) => {
-      if (e.target === previewModalOverlay) closePrintPreview();
-    });
-
-    btnConfirmFromPreview.addEventListener('click', () => {
-      closePrintPreview();
-      document.getElementById('paymentCard').scrollIntoView({ behavior: 'smooth' });
-      const confirmBtn = document.getElementById('btnConfirmOrder');
-      confirmBtn.classList.add('ring-4', 'ring-pink-300');
-      setTimeout(() => confirmBtn.classList.remove('ring-4', 'ring-pink-300'), 1500);
-    });
-
-    // Place Order
-    document.getElementById('btnConfirmOrder').addEventListener('click', async () => {
-      if (!uploadedFile) {
-        alert('অনুগ্রহ করে ফাইল বা ছবি আপলোড করুন।');
-        return;
-      }
-
-      const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
-      const trxId = document.getElementById('trxIdInput').value.trim();
-
-      if ((paymentMethod === 'bkash' || paymentMethod === 'nagad') && !trxId) {
-        alert('অনুগ্রহ করে বিকাশের/নগদের TrxID লিখুন।');
-        return;
-      }
-
-      const isNid = uploadedFile.is_nid || currentMode === 'nid';
-      const nupEl = document.querySelector('input[name="pages_per_sheet"]:checked');
-      const nup = (!isNid && nupEl) ? parseInt(nupEl.value) : 1;
-
-      const orderPayload = {
-        shop_id: SHOP_ID,
-        file_id: uploadedFile.file_id,
-        original_filename: uploadedFile.original_filename,
-        file_type: uploadedFile.file_type,
-        page_count: uploadedFile.page_count,
-        copies: parseInt(inputCopies.value),
-        paper_size: isNid ? 'NID' : document.querySelector('input[name="paper_size"]:checked').value,
-        color_mode: document.querySelector('input[name="color_mode"]:checked').value,
-        duplex: isNid ? 'single' : document.querySelector('input[name="duplex"]:checked').value,
-        pages_per_sheet: nup,
-        payment_method: paymentMethod,
-        trx_id: trxId,
-        customer_name: document.getElementById('custNameInput').value.trim() || 'Walk-in'
-      };
-
-      try {
-        const res = await fetch('/api/order/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(orderPayload)
-        });
-        const data = await res.json();
-        if (data.success) {
-          openTracker(data.order_id);
-        } else {
-          alert('অর্ডার তৈরিতে সমস্যা হয়েছে।');
-        }
-      } catch (err) {
-        alert('সার্ভারে সংযোগ পাওয়া যায়নি।');
-      }
-    });
-
-    function openTracker(orderId) {
-      document.getElementById('trackerOverlay').classList.remove('hidden');
-      document.getElementById('statusOrderId').innerText = `Order ID: #${orderId}`;
-
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const orderSocket = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
-
-      orderSocket.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.event === 'STATUS_CHANGE') {
-          handleStatusUpdate(msg.status, msg.message);
-        }
-      };
-    }
-
-    function handleStatusUpdate(status, message) {
-      document.getElementById('statusMessage').innerText = message;
-
-      if (status === 'paid') {
-        document.getElementById('step2Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
-        document.getElementById('step2Dot').innerText = '✓';
-        document.getElementById('statusIcon').innerText = '🖨️';
-        document.getElementById('statusTitle').innerText = 'পেমেন্ট সম্পন্ন';
-      } else if (status === 'printing') {
-        document.getElementById('step2Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
-        document.getElementById('step2Dot').innerText = '✓';
-        document.getElementById('step3Dot').className = 'w-4 h-4 rounded-full bg-pink-600 text-white flex items-center justify-center text-[10px] pulse-dot';
-        document.getElementById('statusIcon').innerText = '⚡';
-        document.getElementById('statusTitle').innerText = 'প্রিন্ট হচ্ছে...';
-      } else if (status === 'completed') {
-        document.getElementById('step3Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
-        document.getElementById('step3Dot').innerText = '✓';
-        document.getElementById('step4Dot').className = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
-        document.getElementById('step4Dot').innerText = '✓';
-        document.getElementById('statusIcon').innerText = '🎉';
-        document.getElementById('statusTitle').innerText = 'প্রিন্ট সম্পন্ন!';
-        document.getElementById('trackerActionBtn').classList.remove('hidden');
-      } else if (status === 'cancelled') {
-        document.getElementById('statusIcon').innerText = '❌';
-        document.getElementById('statusTitle').innerText = 'অর্ডার বাতিল';
-        document.getElementById('trackerActionBtn').classList.remove('hidden');
-      }
-    }
   </script>
+  <script src="/static/customer_print.js?v=2"></script>
 </body>
 </html>

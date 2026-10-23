@@ -1,4 +1,5 @@
 {
-    "server_url": "https://qr-se-print.onrender.com",
-    "api_key": ""
+    "server_url": "https://qr-printing.onrender.com",
+    "printer_name": "",
+    "sumatra_path": ""
 }

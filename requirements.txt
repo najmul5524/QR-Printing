@@ -9,3 +9,5 @@ qrcode[pil]>=7.4.2
 aiofiles>=23.2.1
 pydantic>=2.6.4
 
+pymupdf>=1.24.0
+numpy>=1.26.0
