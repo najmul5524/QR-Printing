@@ -1166,6 +1166,32 @@ async def ping():
     return Response(content="ok", media_type="text/plain", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/storage-status")
+def storage_status():
+    """Diagnostic endpoint to verify whether Cloudflare R2 is configured and reachable."""
+    import storage
+    configured = storage.is_r2_configured()
+    bucket = storage.R2_BUCKET_NAME if configured else None
+    account_prefix = (storage.R2_ACCOUNT_ID[:6] + "...") if storage.R2_ACCOUNT_ID else None
+    client_ok = False
+    error = None
+    if configured:
+        try:
+            client = storage.get_r2_client()
+            if client:
+                client.head_bucket(Bucket=storage.R2_BUCKET_NAME)
+                client_ok = True
+        except Exception as e:
+            error = str(e)
+    return {
+        "r2_configured": configured,
+        "bucket_name": bucket,
+        "account_prefix": account_prefix,
+        "connected": client_ok,
+        "error": error
+    }
+
+
 @app.get("/transfer", response_class=HTMLResponse)
 async def transfer_landing(request: Request):
     return templates.TemplateResponse(request=request, name="transfer_room.html", context={"room": None})
