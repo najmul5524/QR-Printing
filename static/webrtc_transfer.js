@@ -188,18 +188,19 @@
     }
 
     reader.onload = (e) => {
-      if (dc.bufferedAmount > 8 * 1024 * 1024) {
-        setTimeout(() => reader.onload(e), 50);
+      // Flow control for WebRTC buffer
+      if (dc.bufferedAmount > 4 * 1024 * 1024) {
+        setTimeout(() => reader.onload(e), 40);
         return;
       }
       dc.send(e.target.result);
       offset += e.target.result.byteLength;
-      if (onProgress) onProgress(Math.min(100, Math.round(offset / file.size * 100)));
+      if (onProgress) onProgress(offset, file.size);
 
       if (offset < file.size) {
         readSlice();
       } else {
-        if (onProgress) onProgress(100);
+        if (onProgress) onProgress(file.size, file.size);
       }
     };
 
@@ -222,8 +223,7 @@
       receivedBuffers.push(data);
       receivedBytes += data.byteLength;
       if (incomingInfo) {
-        const pct = Math.min(100, Math.round(receivedBytes / incomingInfo.size * 100));
-        showP2PDownloadProgress(incomingInfo.name, incomingInfo.size, pct);
+        showP2PDownloadProgress(incomingInfo.name, incomingInfo.size, receivedBytes);
 
         if (receivedBytes >= incomingInfo.size) {
           const blob = new Blob(receivedBuffers, { type: incomingInfo.type || 'application/octet-stream' });
@@ -236,7 +236,7 @@
     }
   }
 
-  function showP2PDownloadProgress(name, size, pct) {
+  function showP2PDownloadProgress(name, size, loaded) {
     let p = document.getElementById('p2pProgressBox');
     if (!p) {
       p = document.createElement('div');
@@ -245,11 +245,12 @@
       const container = document.getElementById('fileList');
       if (container) container.parentNode.insertBefore(p, container);
     }
+    const pct = Math.min(100, Math.round(loaded / size * 100));
     p.classList.remove('hidden');
     p.innerHTML = `
       <div class="flex justify-between font-bold text-gray-800">
         <span>⚡ ডিরেক্ট আসছে: ${esc(name)}</span>
-        <span>${pct}%</span>
+        <span>${fmtSize(loaded)} / ${fmtSize(size)} (${pct}%)</span>
       </div>
       <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
         <div class="bg-gradient-to-r from-pink-600 to-orange-500 h-full transition-all" style="width: ${pct}%"></div>

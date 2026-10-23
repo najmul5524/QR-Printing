@@ -144,7 +144,7 @@
       location.href = '/transfer';
     });
 
-    // ── upload (one file after another, with progress) ──
+    // ── upload (one file after another, with live sender progress & preview) ──
     function uploadOne(file, row) {
       return new Promise((resolve) => {
         const bar = row.querySelector('.bar'), pct = row.querySelector('.pct');
@@ -153,10 +153,23 @@
         fd.append('device', DEVICE);
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `/api/room/${ROOM}/upload`);
-        xhr.upload.onprogress = (e) => { if (e.lengthComputable) { const p = Math.round(e.loaded / e.total * 100); bar.style.width = p + '%'; pct.textContent = p + '%'; } };
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const p = Math.round(e.loaded / e.total * 100);
+            bar.style.width = p + '%';
+            pct.textContent = `${fmtSize(e.loaded)} / ${fmtSize(e.total)} (${p}%)`;
+          }
+        };
         xhr.onload = () => {
-          if (xhr.status === 200) { pct.textContent = '✅'; bar.classList.replace('bg-pink-600', 'bg-green-500'); }
-          else { let m = 'ব্যর্থ'; try { m = JSON.parse(xhr.responseText).detail || m; } catch (e) {} pct.textContent = '❌'; row.querySelector('.msg').textContent = m; }
+          if (xhr.status === 200) {
+            pct.textContent = `✅ সম্পূর্ণ (${fmtSize(file.size)})`;
+            bar.classList.replace('bg-pink-600', 'bg-green-500');
+          } else {
+            let m = 'ব্যর্থ';
+            try { m = JSON.parse(xhr.responseText).detail || m; } catch (e) {}
+            pct.textContent = '❌';
+            row.querySelector('.msg').textContent = m;
+          }
           resolve();
         };
         xhr.onerror = () => { pct.textContent = '❌'; row.querySelector('.msg').textContent = 'সংযোগ পাওয়া যায়নি'; resolve(); };
@@ -167,10 +180,31 @@
     async function uploadFiles(list) {
       for (const file of Array.from(list)) {
         const row = document.createElement('div');
-        row.className = 'border rounded-lg p-2 text-xs';
-        row.innerHTML = `<div class="flex justify-between gap-2"><span class="truncate font-semibold">${esc(file.name)} <span class="text-gray-400">(${fmtSize(file.size)})</span></span><span class="pct shrink-0">0%</span></div>
-          <div class="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden mt-1"><div class="bar bg-pink-600 h-full w-0 transition-all"></div></div><p class="msg text-red-600"></p>`;
+        row.className = 'border-2 border-pink-100 bg-pink-50/40 rounded-xl p-3 text-xs space-y-1.5 shadow-sm';
+        
+        let thumbHtml = '';
+        if (file.type.startsWith('image/')) {
+          thumbHtml = `<img src="${URL.createObjectURL(file)}" class="w-10 h-10 object-cover rounded-lg border shrink-0 bg-white">`;
+        } else {
+          thumbHtml = `<div class="w-10 h-10 rounded-lg bg-white border flex items-center justify-center text-lg shrink-0">📄</div>`;
+        }
+
+        row.innerHTML = `
+          <div class="flex items-center gap-2.5">
+            ${thumbHtml}
+            <div class="min-w-0 flex-1">
+              <p class="font-bold text-gray-800 truncate">${esc(file.name)}</p>
+              <p class="text-[11px] text-gray-500">${fmtSize(file.size)} • ${esc(file.type || 'ফাইল')}</p>
+            </div>
+            <span class="pct font-bold text-pink-600 shrink-0 text-right">0%</span>
+          </div>
+          <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
+            <div class="bar bg-gradient-to-r from-pink-600 to-orange-500 h-full w-0 transition-all duration-150"></div>
+          </div>
+          <p class="msg text-red-600 font-bold"></p>
+        `;
         $('uploadList').prepend(row);
+
         const isP2P = window.isP2PReady && window.isP2PReady();
         if (!isP2P && file.size > MAX) {
           row.querySelector('.pct').textContent = '❌ ৫০ MB অতিক্রম করেছে';
@@ -182,12 +216,14 @@
         let sentP2P = false;
         if (isP2P) {
           try {
-            sentP2P = window.sendP2PFile(file, (p) => {
+            sentP2P = window.sendP2PFile(file, (loaded, total) => {
+              const p = Math.round(loaded / total * 100);
               row.querySelector('.bar').style.width = p + '%';
-              row.querySelector('.pct').textContent = '⚡ ' + p + '%';
+              row.querySelector('.pct').textContent = `⚡ ${fmtSize(loaded)} / ${fmtSize(total)} (${p}%)`;
               if (p >= 100) {
-                row.querySelector('.pct').textContent = '✅ (P2P)';
-                row.querySelector('.bar').classList.replace('bg-pink-600', 'bg-green-500');
+                row.querySelector('.pct').textContent = `✅ সম্পূর্ণ (P2P)`;
+                row.querySelector('.bar').classList.replace('from-pink-600', 'from-green-500');
+                row.querySelector('.bar').classList.replace('to-orange-500', 'to-green-600');
               }
             });
           } catch (e) {}
@@ -203,7 +239,10 @@
           }
         }
       }
-      setTimeout(() => { $('uploadList').innerHTML = ''; }, 8000);
+      setTimeout(() => {
+        // Keep uploaded indicator visible for 15s instead of vanishing immediately
+        $('uploadList').querySelectorAll('.border-green-500').forEach(e => e.remove());
+      }, 15000);
     }
 
     $('dropzone').addEventListener('click', () => $('fileInput').click());
