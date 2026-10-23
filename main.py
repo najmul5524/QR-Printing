@@ -1335,7 +1335,19 @@ async def websocket_room(websocket: WebSocket, room_id: str):
     await manager.connect_room(rid, websocket)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+                # WebRTC Signaling relay (P2P direct file transfer between phone and PC)
+                if msg.get("type") in ("webrtc_offer", "webrtc_answer", "webrtc_candidate", "webrtc_join"):
+                    for ws in list(manager.room_connections.get(rid, [])):
+                        if ws != websocket:
+                            try:
+                                await ws.send_text(raw)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
     except WebSocketDisconnect:
         manager.disconnect_room(rid, websocket)
     except Exception:

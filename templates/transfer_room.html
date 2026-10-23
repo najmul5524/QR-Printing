@@ -62,6 +62,7 @@
       <img src="/r/{{ room.id }}/qr.png" alt="QR" class="w-44 h-44 rounded-xl border p-1 bg-white">
       <div class="text-center sm:text-left space-y-1.5 flex-1 min-w-0">
         <p class="text-xs text-gray-500">অন্য ডিভাইসে এই QR স্ক্যান করুন, অথবা কোড দিয়ে যোগ দিন:</p>
+        <div class="flex items-center justify-between"><span class="text-xs text-gray-400">কোড:</span><span id="p2pStatusBadge" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-yellow-100 text-yellow-800">কানেক্ট হচ্ছে...</span></div>
         <p class="font-mono font-black text-3xl tracking-widest text-gray-900" id="roomCode">{{ room.id }}</p>
         <div class="flex gap-2">
           <input id="roomLink" readonly value="{{ room.url }}" class="flex-1 min-w-0 px-2 py-1.5 border rounded-lg text-[11px] font-mono bg-gray-50">
@@ -94,6 +95,7 @@
     <button id="btnClose" class="w-full py-2 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg">🗑️ সেশন শেষ করুন ও সব ফাইল মুছে ফেলুন</button>
   </div>
 
+  <script src="/static/webrtc_transfer.js"></script>
   <script>
     const ROOM = "{{ room.id }}";
     const MAX = 50 * 1024 * 1024;
@@ -170,8 +172,21 @@
           <div class="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden mt-1"><div class="bar bg-pink-600 h-full w-0 transition-all"></div></div><p class="msg text-red-600"></p>`;
         $('uploadList').prepend(row);
         if (file.size > MAX) { row.querySelector('.pct').textContent = '❌'; row.querySelector('.msg').textContent = 'ফাইল ৫০ MB এর বেশি'; continue; }
-        await uploadOne(file, row);
-        loadFiles();
+        let sentP2P = false;
+        try {
+          sentP2P = window.sendP2PFile(file, (p) => {
+            row.querySelector('.bar').style.width = p + '%';
+            row.querySelector('.pct').textContent = '⚡ ' + p + '%';
+            if (p >= 100) {
+              row.querySelector('.pct').textContent = '✅ (P2P)';
+              row.querySelector('.bar').classList.replace('bg-pink-600', 'bg-green-500');
+            }
+          });
+        } catch (e) {}
+        if (!sentP2P) {
+          await uploadOne(file, row);
+          loadFiles();
+        }
       }
       setTimeout(() => { $('uploadList').innerHTML = ''; }, 8000);
     }
@@ -186,9 +201,18 @@
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${proto}//${location.host}/ws/room/${ROOM}`);
+      ws.onopen = () => {
+        if (window.initWebRTC) window.initWebRTC(ws, DEVICE === 'পিসি');
+      };
       ws.onmessage = (ev) => {
-        const m = JSON.parse(ev.data);
-        if (m.event === 'ROOM_CLOSED') location.href = '/transfer'; else loadFiles();
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.type && m.type.startsWith('webrtc_')) {
+            if (window.handleWebRTCSignal) window.handleWebRTCSignal(m);
+            return;
+          }
+          if (m.event === 'ROOM_CLOSED') location.href = '/transfer'; else loadFiles();
+        } catch (e) {}
       };
       ws.onclose = () => setTimeout(connect, 3000);
       setInterval(() => { try { ws.send('ping'); } catch (e) {} }, 25000);
