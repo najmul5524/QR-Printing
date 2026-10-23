@@ -3,7 +3,8 @@
   const CHUNK_SIZE = 64 * 1024; // 64 KB
   const ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
   ];
 
   let pc = null;
@@ -17,12 +18,15 @@
   let receivedBuffers = [];
   let receivedBytes = 0;
 
+  window.isP2PReady = function() {
+    return peerReady && dc && dc.readyState === 'open';
+  };
+
   window.initWebRTC = function(websocketInstance, isHost) {
     ws = websocketInstance;
     isInitiator = !!isHost;
     createPeerConnection();
 
-    // Notify room of presence
     setTimeout(() => {
       sendSignal({ type: 'webrtc_join', initiator: isInitiator });
       if (isInitiator) {
@@ -119,13 +123,50 @@
     const badge = document.getElementById('p2pStatusBadge');
     if (!badge) return;
     if (state === 'connected') {
-      badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-green-100 text-green-800 flex items-center gap-1';
-      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> P2P ডিরেক্ট কানেক্টেড (০ সার্ভার ডাটা)';
+      badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-green-100 text-green-800 flex items-center gap-1 cursor-pointer';
+      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ P2P ডিরেক্ট সক্রিয় (আনলিমিটেড ফ্রি)';
+      badge.onclick = null;
     } else {
-      badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-yellow-100 text-yellow-800 flex items-center gap-1';
-      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> ক্লাউড সিঙ্ক মোড';
+      badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 flex items-center gap-1 cursor-pointer hover:bg-amber-200';
+      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> ☁️ ক্লাউড মোড (৫০ MB পর্যন্ত) • ❓ সাহায্য';
+      badge.onclick = () => window.showP2PHelpModal();
     }
   }
+
+  window.showP2PHelpModal = function() {
+    let m = document.getElementById('p2pHelpModal');
+    if (m) { m.classList.remove('hidden'); return; }
+
+    m = document.createElement('div');
+    m.id = 'p2pHelpModal';
+    m.className = 'fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+    m.innerHTML = `
+      <div class="bg-white max-w-md w-full rounded-2xl p-5 shadow-2xl border space-y-3.5 text-xs">
+        <div class="flex items-center justify-between border-b pb-2.5">
+          <h3 class="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+            <span>⚡</span> <span>P2P ডিরেক্ট সংযোগ সক্রিয় করার নিয়ম</span>
+          </h3>
+          <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <p class="text-gray-600">
+          P2P সক্রিয় থাকলে আপনি <b>যেকোনো বড় ফাইল (১০০ MB, ৫০০ MB বা ১ GB+) সম্পূর্ণ ফ্রি ও চোখের পলকে</b> পাঠাতে পারবেন। এটি ব্লক থাকলে সর্বোচ্চ ৫০ MB ফাইল ক্লাউডের মাধ্যমে পাঠানো যাবে।
+        </p>
+        <div class="space-y-2 bg-gray-50 p-3 rounded-xl border">
+          <p class="font-bold text-gray-800">P2P ব্লক ছাড়ানোর উপায়:</p>
+          <ul class="list-disc list-inside space-y-1.5 text-gray-700">
+            <li><b>দোকানের ওয়াইফাই বা মোবাইল হটস্পট:</b> মোবাইল ও পিসি একই ওয়াইফাই বা হটস্পটে রাখলে সাথে সাথে P2P কানেক্ট হয়ে যাবে।</li>
+            <li><b>VPN বা AdBlocker বন্ধ করুন:</b> ফোনে যদি কোনো VPN চালু থাকে তা সাময়িক বন্ধ করুন।</li>
+            <li><b>ব্রাউজার পারমিশন:</b> Chrome/Safari/Brave ব্রাউজারের কোনো 'Shield' বা 'Data Saver' থাকলে অফ করুন।</li>
+            <li><b>পেজ রিফ্রেশ দিন:</b> উভয় ডিভাইসেই পেজটি একবার রিফ্রেশ করুন।</li>
+          </ul>
+        </div>
+        <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="w-full py-2.5 bg-gray-900 text-white font-bold rounded-xl text-center">
+          বুঝেছি, ঠিক আছে
+        </button>
+      </div>
+    `;
+    document.body.appendChild(m);
+  };
 
   window.sendP2PFile = function(file, onProgress) {
     if (!dc || dc.readyState !== 'open') return false;
@@ -178,7 +219,6 @@
         }
       } catch (e) {}
     } else {
-      // Binary chunk
       receivedBuffers.push(data);
       receivedBytes += data.byteLength;
       if (incomingInfo) {
@@ -186,7 +226,6 @@
         showP2PDownloadProgress(incomingInfo.name, incomingInfo.size, pct);
 
         if (receivedBytes >= incomingInfo.size) {
-          // File complete!
           const blob = new Blob(receivedBuffers, { type: incomingInfo.type || 'application/octet-stream' });
           triggerBlobDownload(blob, incomingInfo.name);
           addP2PFileToList(incomingInfo.name, incomingInfo.size, blob);

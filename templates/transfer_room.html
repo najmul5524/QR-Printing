@@ -171,21 +171,36 @@
         row.innerHTML = `<div class="flex justify-between gap-2"><span class="truncate font-semibold">${esc(file.name)} <span class="text-gray-400">(${fmtSize(file.size)})</span></span><span class="pct shrink-0">0%</span></div>
           <div class="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden mt-1"><div class="bar bg-pink-600 h-full w-0 transition-all"></div></div><p class="msg text-red-600"></p>`;
         $('uploadList').prepend(row);
-        if (file.size > MAX) { row.querySelector('.pct').textContent = '❌'; row.querySelector('.msg').textContent = 'ফাইল ৫০ MB এর বেশি'; continue; }
+        const isP2P = window.isP2PReady && window.isP2PReady();
+        if (!isP2P && file.size > MAX) {
+          row.querySelector('.pct').textContent = '❌ ৫০ MB অতিক্রম করেছে';
+          row.querySelector('.msg').innerHTML = 'P2P সংযোগ সক্রিয় নেই। <a href="javascript:window.showP2PHelpModal()" class="underline font-bold text-pink-600">ব্লক ছাড়ানোর নির্দেশাবলী দেখুন</a>।';
+          if (window.showP2PHelpModal) window.showP2PHelpModal();
+          continue;
+        }
+
         let sentP2P = false;
-        try {
-          sentP2P = window.sendP2PFile(file, (p) => {
-            row.querySelector('.bar').style.width = p + '%';
-            row.querySelector('.pct').textContent = '⚡ ' + p + '%';
-            if (p >= 100) {
-              row.querySelector('.pct').textContent = '✅ (P2P)';
-              row.querySelector('.bar').classList.replace('bg-pink-600', 'bg-green-500');
-            }
-          });
-        } catch (e) {}
+        if (isP2P) {
+          try {
+            sentP2P = window.sendP2PFile(file, (p) => {
+              row.querySelector('.bar').style.width = p + '%';
+              row.querySelector('.pct').textContent = '⚡ ' + p + '%';
+              if (p >= 100) {
+                row.querySelector('.pct').textContent = '✅ (P2P)';
+                row.querySelector('.bar').classList.replace('bg-pink-600', 'bg-green-500');
+              }
+            });
+          } catch (e) {}
+        }
+
         if (!sentP2P) {
-          await uploadOne(file, row);
-          loadFiles();
+          if (file.size <= MAX) {
+            await uploadOne(file, row);
+            loadFiles();
+          } else {
+            row.querySelector('.pct').textContent = '❌';
+            row.querySelector('.msg').textContent = 'P2P সংযোগ ছাড়া ৫০ MB এর বেশি ফাইল ক্লাউডে পাঠানো যাবে না।';
+          }
         }
       }
       setTimeout(() => { $('uploadList').innerHTML = ''; }, 8000);
