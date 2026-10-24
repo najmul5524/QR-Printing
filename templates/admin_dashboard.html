@@ -847,13 +847,31 @@
           try { orderMeta = JSON.parse(rowBtn.dataset.order); } catch (e) {}
         }
 
-        const res = await fetch(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1`);
-        if (!res.ok) {
+        // 1. Get direct Cloudflare R2 URL (0 Render bandwidth) with safe local fallback
+        const metaRes = await fetch(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1&json_url=1`);
+        if (!metaRes.ok) {
           alert('ফাইলটি পাওয়া যায়নি বা ইতিমধ্যে প্রিন্ট হয়ে গেছে।');
           return;
         }
-        const contentType = (res.headers.get('content-type') || '').toLowerCase();
-        const blob = await res.blob();
+        const metaInfo = await metaRes.json();
+        let contentType = (metaInfo.content_type || '').toLowerCase();
+        let blob = null;
+        try {
+          const fileRes = await fetch(metaInfo.url);
+          if (fileRes.ok) {
+            contentType = (fileRes.headers.get('content-type') || contentType).toLowerCase();
+            blob = await fileRes.blob();
+          }
+        } catch (e) {}
+        if (!blob) {
+          const fallbackRes = await fetch(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1&local=1`);
+          if (!fallbackRes.ok) {
+            alert('ফাইলটি লোড করা যায়নি।');
+            return;
+          }
+          contentType = (fallbackRes.headers.get('content-type') || contentType).toLowerCase();
+          blob = await fallbackRes.blob();
+        }
         const blobUrl = URL.createObjectURL(blob);
 
         let frame = document.getElementById('cleanBrowserPrintFrame');

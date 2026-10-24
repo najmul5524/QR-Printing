@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
 
 import database as db
+import storage
 import studio
 import utils
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -537,17 +538,36 @@ async def edit_order_details(order_id: str, request: Request):
     return {"success": True, "updated": updates}
 
 @app.get("/admin/order/{order_id}/file")
-async def admin_download_order_file(order_id: str, request: Request, inline: int = 0):
+async def admin_download_order_file(order_id: str, request: Request, inline: int = 0, json_url: int = 0, local: int = 0):
     shop = get_current_shop(request)
     if not shop:
         raise HTTPException(status_code=401, detail="Unauthorized")
     order = db.get_order(order_id)
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="Order not found")
-    if not os.path.exists(order["file_path"]):
-        raise HTTPException(status_code=404, detail="File has been deleted or not found")
     ext = utils.get_ext(order["file_path"])
     mtype = "application/pdf" if ext == "pdf" else ("image/jpeg" if ext in ("jpg", "jpeg") else "image/png")
+
+    # Serve directly from Cloudflare R2 (0 Render egress bandwidth) when configured
+    if not local and storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path,
+            order["file_path"],
+            order["original_filename"],
+            bool(inline),
+            mtype,
+        )
+        if r2_url:
+            if json_url:
+                return {"url": r2_url, "content_type": mtype, "storage": "cloudflare_r2"}
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+
+    if not os.path.exists(order["file_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, order["file_path"])
+    if not os.path.exists(order["file_path"]):
+        raise HTTPException(status_code=404, detail="File has been deleted or not found")
+    if json_url:
+        return {"url": f"/admin/order/{order_id}/file?inline={inline}&local=1", "content_type": mtype, "storage": "local"}
     return FileResponse(
         order["file_path"],
         filename=order["original_filename"],
@@ -573,6 +593,8 @@ def admin_preview_order_sheet(
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="Order not found")
     path = order["file_path"]
+    if not os.path.isfile(path):
+        storage.ensure_local_from_r2(path)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="File not found or already printed")
 
@@ -1334,6 +1356,10 @@ async def customer_create_order(request: Request):
                 rate = shop["rate_color_double"] if duplex == "double" else shop["rate_color_single"]
             total_price = rate * page_count * copies
 
+    # Sync printable order file to Cloudflare R2 (so downloads/prints use 0 Render egress bandwidth)
+    if storage.is_r2_configured() and os.path.isfile(file_path):
+        await asyncio.to_thread(storage.upload_file_to_r2, file_path)
+
     order_data = {
         "id": order_id,
         "shop_id": shop["id"],
@@ -1399,7 +1425,7 @@ async def customer_submit_payment(order_id: str, request: Request):
 
 @app.get("/download/{order_id}")
 async def download_print_file(order_id: str, key: str):
-    """Allows authenticated shop agent to download the file for printing."""
+    """Allows authenticated shop agent to download the file for printing (directly from Cloudflare R2 when configured)."""
     shop = db.get_shop_by_api_key(key)
     if not shop:
         raise HTTPException(status_code=401, detail="Invalid API Key")
@@ -1408,14 +1434,29 @@ async def download_print_file(order_id: str, key: str):
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="File not found")
         
-    if not os.path.exists(order["file_path"]):
-        raise HTTPException(status_code=404, detail="File has already been securely removed")
-        
     dl_name = order["original_filename"]
     stored_ext = os.path.splitext(order["file_path"])[1].lower()
     if stored_ext and os.path.splitext(dl_name)[1].lower() != stored_ext:
         dl_name = os.path.splitext(dl_name)[0] + stored_ext
-    return FileResponse(order["file_path"], filename=dl_name)
+    mtype = "application/pdf" if stored_ext == ".pdf" else ("image/jpeg" if stored_ext in (".jpg", ".jpeg") else "image/png")
+
+    if storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path,
+            order["file_path"],
+            dl_name,
+            False,
+            mtype,
+        )
+        if r2_url:
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+
+    if not os.path.exists(order["file_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, order["file_path"])
+    if not os.path.exists(order["file_path"]):
+        raise HTTPException(status_code=404, detail="File has already been securely removed")
+        
+    return FileResponse(order["file_path"], filename=dl_name, media_type=mtype)
 
 @app.post("/api/agent/order/{order_id}/printed")
 async def agent_mark_printed(order_id: str, request: Request):
@@ -1499,6 +1540,10 @@ async def _store_transfer(shop_id: int, direction: str, file: UploadFile, sender
         utils.secure_delete_file(stored_path)
         raise HTTPException(status_code=400, detail="ফাঁকা ফাইল পাঠানো যাবে না।")
 
+    if storage.is_r2_configured():
+        mtype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        await asyncio.to_thread(storage.upload_file_to_r2, stored_path, None, mtype)
+
     now = datetime.now(timezone.utc)
     record = {
         "id": tid, "shop_id": shop_id, "direction": direction,
@@ -1559,12 +1604,24 @@ async def admin_download_transfer(transfer_id: str, request: Request):
     if not shop:
         raise HTTPException(status_code=401, detail="Unauthorized")
     t = db.get_transfer(transfer_id.upper())
-    if not t or t["shop_id"] != shop["id"] or not os.path.isfile(t["stored_path"]):
+    if not t or t["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="File not found or expired")
+    mtype = mimetypes.guess_type(t["original_filename"])[0] or "application/octet-stream"
+    if storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path, t["stored_path"], t["original_filename"], False, mtype
+        )
+        if r2_url:
+            db.increment_transfer_download(t["id"])
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+    if not os.path.isfile(t["stored_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, t["stored_path"])
+    if not os.path.isfile(t["stored_path"]):
         raise HTTPException(status_code=404, detail="File not found or expired")
     db.increment_transfer_download(t["id"])
     return FileResponse(
         t["stored_path"], filename=t["original_filename"],
-        media_type=mimetypes.guess_type(t["original_filename"])[0] or "application/octet-stream"
+        media_type=mtype
     )
 
 
@@ -1583,7 +1640,9 @@ async def admin_delete_transfer(transfer_id: str, request: Request):
 
 def _public_transfer_or_404(transfer_id: str):
     t = db.get_transfer(transfer_id.strip().upper())
-    if not t or t["direction"] != "to_customer" or _transfer_expired(t) or not os.path.isfile(t["stored_path"]):
+    if not t or t["direction"] != "to_customer" or _transfer_expired(t):
+        raise HTTPException(status_code=404, detail="Link expired or file not found")
+    if not os.path.isfile(t["stored_path"]) and not storage.r2_object_exists(storage.path_to_r2_key(t["stored_path"])):
         raise HTTPException(status_code=404, detail="Link expired or file not found")
     return t
 
@@ -1608,6 +1667,15 @@ async def public_transfer_page(transfer_id: str, request: Request):
 async def public_transfer_download(transfer_id: str):
     t = _public_transfer_or_404(transfer_id)
     db.increment_transfer_download(t["id"])
+    mtype = mimetypes.guess_type(t["original_filename"])[0] or "application/octet-stream"
+    if not t["one_time"] and storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path, t["stored_path"], t["original_filename"], False, mtype
+        )
+        if r2_url:
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+    if not os.path.isfile(t["stored_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, t["stored_path"])
     background = None
     if t["one_time"]:
         def _burn():
@@ -1616,7 +1684,7 @@ async def public_transfer_download(transfer_id: str):
         background = BackgroundTask(_burn)
     return FileResponse(
         t["stored_path"], filename=t["original_filename"],
-        media_type=mimetypes.guess_type(t["original_filename"])[0] or "application/octet-stream",
+        media_type=mtype,
         background=background
     )
 
@@ -1765,9 +1833,13 @@ async def room_upload(room_id: str, file: UploadFile = File(...), device: str = 
         utils.secure_delete_file(stored)
         raise HTTPException(status_code=413, detail=f"সেশনের মোট সাইজ {ROOM_MAX_TOTAL_BYTES // (1024 * 1024)} MB এর বেশি হতে পারবে না।")
 
+    orig_name = utils.safe_filename(file.filename, "file")
+    if storage.is_r2_configured():
+        await asyncio.to_thread(storage.upload_file_to_r2, stored, None, "application/octet-stream")
+
     db.add_room_file({
         "id": fid, "room_id": room["id"],
-        "original_filename": utils.safe_filename(file.filename, "file"),
+        "original_filename": orig_name,
         "stored_path": stored, "file_size": size,
         "uploader": utils.safe_filename(device, "")[:30],
         "created_at": _now_iso(),
@@ -1779,7 +1851,9 @@ async def room_upload(room_id: str, file: UploadFile = File(...), device: str = 
 def _room_file_or_404(room_id: str, file_id: str):
     room = _room_or_404(room_id)
     f = db.get_room_file(file_id)
-    if not f or f["room_id"] != room["id"] or not os.path.isfile(f["stored_path"]):
+    if not f or f["room_id"] != room["id"]:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not os.path.isfile(f["stored_path"]) and not storage.r2_object_exists(storage.path_to_r2_key(f["stored_path"])):
         raise HTTPException(status_code=404, detail="File not found")
     return room, f
 
@@ -1787,6 +1861,14 @@ def _room_file_or_404(room_id: str, file_id: str):
 @app.get("/api/room/{room_id}/file/{file_id}")
 async def room_download(room_id: str, file_id: str):
     _, f = _room_file_or_404(room_id, file_id)
+    if storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path, f["stored_path"], f["original_filename"], False, "application/octet-stream"
+        )
+        if r2_url:
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+    if not os.path.isfile(f["stored_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, f["stored_path"])
     # always as attachment – an uploaded .html can never run inside our site
     return FileResponse(f["stored_path"], filename=f["original_filename"], media_type="application/octet-stream")
 

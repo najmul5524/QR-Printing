@@ -453,19 +453,28 @@ def get_or_create_nup_preview(input_pdf_path: str, cache_path: str, nup: int) ->
 
 # ── File housekeeping ───────────────────────────────────────────────────────
 def secure_delete_file(file_path: str):
-    """Safely removes a file from the server immediately after print completion."""
+    """Safely removes a file from local disk and Cloudflare R2 immediately after print completion."""
     try:
         if file_path and os.path.isfile(file_path):
             os.remove(file_path)
             print(f"[+] Securely deleted file: {file_path}")
     except Exception as e:
         print(f"[!] Failed to delete file {file_path}: {e}")
+    try:
+        import storage
+        storage.delete_local_and_r2(file_path)
+    except Exception:
+        pass
 
 
 def cleanup_old_files(directory: str, max_age_seconds: float, prefix: Optional[str] = None) -> int:
     """Deletes regular files older than max_age_seconds (optionally only those starting with prefix)."""
     removed = 0
     now = time.time()
+    try:
+        import storage as _storage
+    except Exception:
+        _storage = None
     try:
         for name in os.listdir(directory):
             if name.startswith("."):
@@ -479,6 +488,11 @@ def cleanup_old_files(directory: str, max_age_seconds: float, prefix: Optional[s
                     removed += 1
                 except OSError:
                     pass
+                if _storage:
+                    try:
+                        _storage.delete_local_and_r2(path)
+                    except Exception:
+                        pass
     except FileNotFoundError:
         pass
     return removed
