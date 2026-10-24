@@ -177,17 +177,22 @@
                   <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 animate-pulse">প্রিন্ট হচ্ছে...</span>
                 {% elif o.status == "completed" %}
                   <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-green-100 text-green-800">✓ সম্পন্ন</span>
+                  {% if o.file_path %}
+                    <div class="text-[10px] text-emerald-600 font-semibold mt-0.5">⏳ ৩০ মি. পুনরায় প্রিন্টযোগ্য</div>
+                  {% endif %}
                 {% else %}
                   <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-100 text-gray-800">বাতিল</span>
                 {% endif %}
               </td>
               <td class="px-6 py-4 text-right space-x-1 whitespace-nowrap">
-                <a href="/admin/order/{{ o.id }}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
-                  ⬇️
-                </a>
-                <button type="button" data-order="{{ o | tojson | forceescape }}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="লাইভ প্রিভিউ ও কমান্ড এডিট করুন">
-                  ✏️ প্রিভিউ ও এডিট
-                </button>
+                {% if o.file_path %}
+                  <a href="/admin/order/{{ o.id }}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
+                    ⬇️
+                  </a>
+                  <button type="button" data-order="{{ o | tojson | forceescape }}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="লাইভ প্রিভিউ ও কমান্ড এডিট করুন">
+                    ✏️ প্রিভিউ ও এডিট
+                  </button>
+                {% endif %}
                 {% if o.status in ["pending_payment", "paid"] %}
                   <button onclick="approveOrder('{{ o.id }}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
                     🖨️ প্রিন্ট অনুমোদন
@@ -202,8 +207,15 @@
                   <button onclick="completeOrderNow('{{ o.id }}')" class="px-2 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition" title="প্রিন্ট সম্পন্ন হিসেবে মার্ক করুন">
                     ✓ সম্পন্ন
                   </button>
+                {% elif o.status == "completed" and o.file_path %}
+                  <button onclick="approveOrder('{{ o.id }}', true)" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-xs transition" title="একই বা নতুন সেটিংসে পুনরায় প্রিন্ট করুন">
+                    🔄 আবার প্রিন্ট
+                  </button>
+                  <button onclick="deleteOrderFileNow('{{ o.id }}')" class="px-2 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded font-bold text-xs transition" title="এখনই ফাইলটি সার্ভার ও ক্লাউড থেকে মুছে ফেলুন">
+                    🗑️ মুছুন
+                  </button>
                 {% else %}
-                  <span class="text-gray-400 font-semibold text-[11px]">—</span>
+                  <span class="text-gray-400 font-semibold text-[11px]">🔒 ফাইল মুছে ফেলা হয়েছে</span>
                 {% endif %}
               </td>
             </tr>
@@ -885,7 +897,7 @@
         const restoreAndConfirm = () => {
           document.title = origTitle;
           setTimeout(async () => {
-            if (confirm('প্রিন্টার কি প্রিন্ট সম্পন্ন করেছে? (ওকে চাপলে অর্ডারটি "✓ সম্পন্ন" হিসেবে মার্ক হবে এবং সার্ভার থেকে ফাইল মুছে যাবে)')) {
+            if (confirm('প্রিন্টার কি প্রিন্ট সম্পন্ন করেছে? (ওকে চাপলে অর্ডারটি "✓ সম্পন্ন" হবে এবং পরবর্তী ৩০ মিনিট পুনরায় প্রিন্ট করা যাবে)')) {
               URL.revokeObjectURL(blobUrl);
               await completeOrderNow(orderId);
             } else {
@@ -992,6 +1004,17 @@
     async function completeOrderNow(orderId) {
       try {
         const res = await fetch(`/admin/order/${encodeURIComponent(orderId)}/complete`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) location.reload();
+      } catch (e) {
+        alert('ত্রুটি ঘটেছে: ' + e);
+      }
+    }
+
+    async function deleteOrderFileNow(orderId) {
+      if (!confirm('আপনি কি এখনই এই অর্ডারের ফাইলটি সার্ভার ও ক্লাউড থেকে স্থায়ীভাবে মুছে ফেলতে চান?')) return;
+      try {
+        const res = await fetch(`/admin/order/${encodeURIComponent(orderId)}/delete-file`, { method: 'POST' });
         const data = await res.json();
         if (data.success) location.reload();
       } catch (e) {

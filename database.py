@@ -306,6 +306,23 @@ def update_order_status(order_id: str, status: str, printed_at: Optional[str] = 
     conn.commit()
     conn.close()
 
+def mark_order_file_purged(order_id: str):
+    """Clears file_path in DB once the underlying print file has been permanently deleted."""
+    conn = get_db()
+    conn.execute("UPDATE orders SET file_path = '' WHERE id = ?", (order_id,))
+    conn.commit()
+    conn.close()
+
+def get_completed_orders_to_purge(cutoff_iso: str) -> List[Dict[str, Any]]:
+    """Returns completed orders whose printed_at timestamp is older than cutoff_iso and still have a file_path."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, file_path FROM orders WHERE status = 'completed' AND file_path != '' AND printed_at IS NOT NULL AND printed_at < ?",
+        (cutoff_iso,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 def get_shop_orders(shop_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()

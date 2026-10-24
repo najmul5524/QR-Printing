@@ -49,6 +49,7 @@ ROOM_TTL_HOURS = 12                          # QR transfer sessions live for 12 
 ROOM_MAX_FILES = 30
 ROOM_MAX_TOTAL_BYTES = 300 * 1024 * 1024     # per session
 ORDER_FILE_MAX_AGE_HOURS = 72                # abandoned print uploads are removed after 72 h
+COMPLETED_RETENTION_MINUTES = 30             # completed print files stay 30 mins for re-print, then auto-delete
 PREVIEW_CACHE_MAX_AGE_HOURS = 2
 
 # Initialize database
@@ -108,7 +109,11 @@ def _now_iso() -> str:
 
 
 def run_cleanup():
-    """Removes expired transfers and abandoned temp / upload files."""
+    """Removes expired transfers, completed print files older than 30 mins, and abandoned temp / upload files."""
+    cutoff_completed = (datetime.now(timezone.utc) - timedelta(minutes=COMPLETED_RETENTION_MINUTES)).isoformat(timespec="seconds")
+    for o in db.get_completed_orders_to_purge(cutoff_completed):
+        utils.secure_delete_file(o["file_path"])
+        db.mark_order_file_purged(o["id"])
     for t in db.get_expired_transfers(_now_iso()):
         utils.secure_delete_file(t["stored_path"])
         db.delete_transfer_row(t["id"])
@@ -127,7 +132,7 @@ async def _cleanup_loop():
             await asyncio.to_thread(run_cleanup)
         except Exception as e:
             print(f"[!] Cleanup error: {e}")
-        await asyncio.sleep(1800)
+        await asyncio.sleep(120)
 
 
 @asynccontextmanager
@@ -460,7 +465,7 @@ async def approve_order(order_id: str, request: Request):
 
 @app.post("/admin/order/{order_id}/complete")
 async def admin_complete_order(order_id: str, request: Request):
-    """Marks an order as completed when printed directly from the browser or confirmed by the shopkeeper."""
+    """Marks an order as completed. Keeps the file for 30 minutes for re-print before auto-deletion."""
     shop = get_current_shop(request)
     if not shop:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -468,17 +473,34 @@ async def admin_complete_order(order_id: str, request: Request):
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    now = datetime.now().isoformat()
+    now = _now_iso()
     db.update_order_status(order_id, "completed", printed_at=now)
-    utils.secure_delete_file(order["file_path"])
 
     await manager.notify_order(order_id, {
         "event": "STATUS_CHANGE",
         "status": "completed",
-        "message": "প্রিন্ট সম্পন্ন হয়েছে! আপনার ফাইলটি সার্ভার থেকে স্বয়ংক্রিয়ভাবে মুছে দেওয়া হয়েছে।"
+        "message": "প্রিন্ট সম্পন্ন হয়েছে! ৩০ মিনিট পর আপনার ফাইলটি সার্ভার থেকে স্বয়ংক্রিয়ভাবে মুছে যাবে।"
     })
     await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id, "status": "completed"})
     return {"success": True}
+
+
+@app.post("/admin/order/{order_id}/delete-file")
+async def admin_delete_order_file(order_id: str, request: Request):
+    """Immediately deletes the print file from local disk and Cloudflare R2 before the 30-min timer."""
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    order = db.get_order(order_id)
+    if not order or order["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.get("file_path"):
+        utils.secure_delete_file(order["file_path"])
+    db.mark_order_file_purged(order_id)
+    await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id})
+    return {"success": True}
+
 
 @app.post("/admin/order/{order_id}/cancel")
 async def cancel_order(order_id: str, request: Request):
@@ -491,7 +513,9 @@ async def cancel_order(order_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Order not found")
         
     db.update_order_status(order_id, "cancelled")
-    utils.secure_delete_file(order["file_path"])
+    if order.get("file_path"):
+        utils.secure_delete_file(order["file_path"])
+    db.mark_order_file_purged(order_id)
     
     await manager.notify_order(order_id, {
         "event": "STATUS_CHANGE",
@@ -1470,17 +1494,14 @@ async def agent_mark_printed(order_id: str, request: Request):
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="Order not found")
         
-    now = datetime.now().isoformat()
+    now = _now_iso()
     db.update_order_status(order_id, "completed", printed_at=now)
     
-    # Auto delete file from server immediately
-    utils.secure_delete_file(order["file_path"])
-    
-    # Notify customer live that print is done & file is deleted
+    # Notify customer live that print is done (file auto-deletes after 30 mins)
     await manager.notify_order(order_id, {
         "event": "STATUS_CHANGE",
         "status": "completed",
-        "message": "প্রিন্ট সম্পন্ন হয়েছে! আপনার ফাইলটি সার্ভার থেকে স্বয়ংক্রিয়ভাবে মুছে দেওয়া হয়েছে।"
+        "message": "প্রিন্ট সম্পন্ন হয়েছে! ৩০ মিনিট পর আপনার ফাইলটি সার্ভার থেকে স্বয়ংক্রিয়ভাবে মুছে যাবে।"
     })
     
     # Notify admin
@@ -2002,12 +2023,11 @@ async def websocket_agent(websocket: WebSocket, api_key: str):
                 order = db.get_order(order_id)
                 if not order or order["shop_id"] != shop_id:
                     continue
-                db.update_order_status(order_id, "completed", printed_at=datetime.now().isoformat())
-                utils.secure_delete_file(order["file_path"])
+                db.update_order_status(order_id, "completed", printed_at=_now_iso())
                 await manager.notify_order(order_id, {
                     "event": "STATUS_CHANGE",
                     "status": "completed",
-                    "message": "প্রিন্ট সম্পন্ন হয়েছে! ফাইলটি মুছে ফেলা হয়েছে।"
+                    "message": "প্রিন্ট সম্পন্ন হয়েছে! ৩০ মিনিট পর ফাইলটি স্বয়ংক্রিয়ভাবে মুছে যাবে।"
                 })
                 await manager.notify_admin(shop_id, {"event": "ORDER_UPDATED", "order_id": order_id})
             elif event == "PRINT_FAILED":
