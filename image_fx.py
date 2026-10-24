@@ -198,3 +198,126 @@ def render_suit_pillow(suit_id: str, target_size: Tuple[int, int]) -> Image.Imag
         draw.polygon([(80, 230), (90, 218), (100, 230)], fill="#ffffff")
 
     return im
+
+
+def order_quad_points(pts: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Orders 4 points into [Top-Left, Top-Right, Bottom-Right, Bottom-Left]."""
+    pts_sorted_y = sorted(pts, key=lambda p: (p[1], p[0]))
+    top_two = sorted(pts_sorted_y[:2], key=lambda p: p[0])
+    bot_two = sorted(pts_sorted_y[2:], key=lambda p: p[0])
+    tl, tr = top_two[0], top_two[1]
+    bl, br = bot_two[0], bot_two[1]
+    return [tl, tr, br, bl]
+
+
+def perspective_crop_4points(
+    img: Image.Image,
+    norm_points: List[Tuple[float, float]],
+    target_ratio: Optional[float] = None
+) -> Image.Image:
+    """
+    CamScanner-style 4-point perspective warp (homography transform):
+    Takes 4 normalized corner coordinates (0..1) of an uneven/skewed document or card
+    and warps the quadrilateral into a flat, straight rectangle.
+    """
+    w, h = img.size
+    pixel_pts = [
+        (max(0.0, min(float(w), float(px) * w)), max(0.0, min(float(h), float(py) * h)))
+        for px, py in norm_points[:4]
+    ]
+    tl, tr, br, bl = order_quad_points(pixel_pts)
+
+    w_top = float(np.hypot(tr[0] - tl[0], tr[1] - tl[1]))
+    w_bot = float(np.hypot(br[0] - bl[0], br[1] - bl[1]))
+    h_left = float(np.hypot(bl[0] - tl[0], bl[1] - tl[1]))
+    h_right = float(np.hypot(br[0] - tr[0], br[1] - tr[1]))
+
+    out_w = max(24, int(round(max(w_top, w_bot))))
+    out_h = max(24, int(round(max(h_left, h_right))))
+
+    if target_ratio and target_ratio > 0:
+        out_h = max(24, int(round(out_w / target_ratio)))
+
+    dst = [
+        (0.0, 0.0),
+        (float(out_w), 0.0),
+        (float(out_w), float(out_h)),
+        (0.0, float(out_h))
+    ]
+    src = [tl, tr, br, bl]
+
+    matrix = []
+    rhs = []
+    for (X, Y), (x, y) in zip(dst, src):
+        matrix.append([X, Y, 1.0, 0.0, 0.0, 0.0, -X * x, -Y * x])
+        matrix.append([0.0, 0.0, 0.0, X, Y, 1.0, -X * y, -Y * y])
+        rhs.append(x)
+        rhs.append(y)
+
+    coeffs = np.linalg.solve(np.array(matrix, dtype=np.float64), np.array(rhs, dtype=np.float64)).tolist()
+    warped = img.transform((out_w, out_h), Image.Transform.PERSPECTIVE, coeffs, Image.Resampling.BICUBIC)
+    return warped
+
+
+def detect_document_corners(img: Image.Image) -> List[Dict[str, float]]:
+    """
+    Automatically estimates the 4 corners of a document or card against its background.
+    Returns 4 normalized points [{"x": .., "y": ..}, ...] in [TL, TR, BR, BL] order.
+    """
+    default_pts = [
+        {"x": 0.07, "y": 0.07},
+        {"x": 0.93, "y": 0.07},
+        {"x": 0.93, "y": 0.93},
+        {"x": 0.07, "y": 0.93}
+    ]
+    try:
+        small = img.copy().convert("RGB")
+        small.thumbnail((320, 320), Image.Resampling.BILINEAR)
+        arr = np.asarray(small, dtype=np.float32)
+        sh, sw, _ = arr.shape
+        if sh < 30 or sw < 30:
+            return default_pts
+
+        t = max(2, int(0.04 * min(sh, sw)))
+        border = np.concatenate([
+            arr[:t, :, :].reshape(-1, 3),
+            arr[-t:, :, :].reshape(-1, 3),
+            arr[:, :t, :].reshape(-1, 3),
+            arr[:, -t:, :].reshape(-1, 3)
+        ])
+        bg_med = np.median(border, axis=0)
+        bg_std = np.std(border, axis=0) + 12.0
+
+        dist = np.sqrt(np.sum(((arr - bg_med) / bg_std) ** 2, axis=2))
+        mask = dist > 1.85
+
+        fg_ratio = float(np.mean(mask))
+        if fg_ratio < 0.08 or fg_ratio > 0.94:
+            return default_pts
+
+        ys, xs = np.where(mask)
+        if len(xs) < 50:
+            return default_pts
+
+        nx = xs.astype(np.float32) / float(sw - 1)
+        ny = ys.astype(np.float32) / float(sh - 1)
+
+        # Find extreme points along diagonal axes (x+y and x-y)
+        s = nx + ny
+        d = nx - ny
+
+        idx_tl = int(np.argmin(s))
+        idx_br = int(np.argmax(s))
+        idx_tr = int(np.argmax(d))
+        idx_bl = int(np.argmin(d))
+
+        pts = [
+            (float(np.clip(nx[idx_tl], 0.02, 0.98)), float(np.clip(ny[idx_tl], 0.02, 0.98))),
+            (float(np.clip(nx[idx_tr], 0.02, 0.98)), float(np.clip(ny[idx_tr], 0.02, 0.98))),
+            (float(np.clip(nx[idx_br], 0.02, 0.98)), float(np.clip(ny[idx_br], 0.02, 0.98))),
+            (float(np.clip(nx[idx_bl], 0.02, 0.98)), float(np.clip(ny[idx_bl], 0.02, 0.98)))
+        ]
+        ordered = order_quad_points(pts)
+        return [{"x": round(p[0], 4), "y": round(p[1], 4)} for p in ordered]
+    except Exception:
+        return default_pts

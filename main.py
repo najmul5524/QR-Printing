@@ -971,6 +971,71 @@ async def replace_cutout_endpoint(
     return {"success": True, "file_id": file_id}
 
 
+
+
+@app.get("/api/image/detect-corners")
+def detect_corners_endpoint(file_id: str, side: str = "front"):
+    """Automatically detects the 4 corners of a tilted document or ID card."""
+    import image_fx
+    safe_id = os.path.basename(str(file_id or ""))
+    if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = safe_id[4:]
+        front, back = nid_paths(token)
+        src = back if side == "back" else front
+    else:
+        src = resolve_upload(safe_id)
+
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        pts = image_fx.detect_document_corners(im)
+    return {"success": True, "points": pts}
+
+
+@app.post("/api/image/perspective-crop")
+async def perspective_crop_endpoint(payload: dict = Body(...)):
+    """
+    CamScanner-style 4-corner Smart Perspective Crop:
+    Takes 4 uneven/tilted corner coordinates and warps them into a straight rectangle.
+    """
+    import image_fx
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    side = str(payload.get("side", "front"))
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        src = back if side == "back" else front
+    else:
+        src = resolve_upload(file_id)
+
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be perspective-cropped")
+
+    raw_pts = payload.get("points", [])
+    if not isinstance(raw_pts, list) or len(raw_pts) < 4:
+        raise HTTPException(status_code=400, detail="4 corner points are required")
+
+    norm_pts = [(float(p.get("x", 0.0)), float(p.get("y", 0.0))) for p in raw_pts[:4]]
+    ratio_key = str(payload.get("ratio", "auto")).strip().lower()
+    ratio_map = {
+        "auto": None,
+        "free": None,
+        "nid": 85.6 / 54.0,
+        "passport": 35.0 / 45.0,
+        "stamp": 20.0 / 25.0,
+        "square": 1.0,
+        "a4": 210.0 / 297.0
+    }
+    target_ratio = ratio_map.get(ratio_key, None)
+
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio)
+        warped.save(src, "JPEG", quality=95)
+    _update_orig_backup(src)
+
+    return {"success": True, "file_id": file_id}
+
+
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
     data = await request.json()

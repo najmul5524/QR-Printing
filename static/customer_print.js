@@ -771,17 +771,330 @@
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
 
-  // ── Cropper.js Integration (Supports both Normal Image & NID Front/Back) ──
+  // ── Smart 4-Corner Perspective Crop (CamScanner Style) + Normal Cropper.js ──
   let cropper = null;
+  let cropMode = 'smart'; // 'smart' | 'normal'
   let activeRatio = 'free';
+  let smartTargetRatio = 'auto';
   let cropNidSide = 'front';
 
-  function loadCropTargetImage() {
+  let smartImg = new Image();
+  let smartPts = [
+    { x: 0.07, y: 0.07 },
+    { x: 0.93, y: 0.07 },
+    { x: 0.93, y: 0.93 },
+    { x: 0.07, y: 0.93 }
+  ];
+  let smartGeom = { pad: 16, drawW: 300, drawH: 300 };
+  let activeDragIdx = -1; // 0..3 = corners, 4..7 = edge midpoints
+
+  function resetSmartPtsDefault() {
+    smartPts = [
+      { x: 0.07, y: 0.07 },
+      { x: 0.93, y: 0.07 },
+      { x: 0.93, y: 0.93 },
+      { x: 0.07, y: 0.93 }
+    ];
+  }
+
+  window.autoDetectSmartCorners = async function() {
+    if (!uploadedFile) return;
+    try {
+      const res = await fetch(`/api/image/detect-corners?file_id=${encodeURIComponent(uploadedFile.file_id)}&side=${encodeURIComponent(cropNidSide)}&t=${Date.now()}`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.points) && data.points.length === 4) {
+        smartPts = data.points.map(p => ({ x: +p.x, y: +p.y }));
+        drawSmartCrop();
+      }
+    } catch (e) {
+      drawSmartCrop();
+    }
+  };
+
+  function bilerp(p0, p1, p2, p3, u, v) {
+    const tx = p0.x * (1 - u) + p1.x * u;
+    const ty = p0.y * (1 - u) + p1.y * u;
+    const bx = p3.x * (1 - u) + p2.x * u;
+    const by = p3.y * (1 - u) + p2.y * u;
+    return { x: tx * (1 - v) + bx * v, y: ty * (1 - v) + by * v };
+  }
+
+  function drawSmartCrop() {
+    const canvas = $('smartCropCanvas');
+    const cont = $('smartCropContainer');
+    if (!canvas || !cont || !smartImg.width) return;
+
+    const pad = 16;
+    const availW = Math.max(200, (cont.clientWidth || 360) - pad * 2 - 4);
+    const availH = Math.max(200, (cont.clientHeight || 340) - pad * 2 - 4);
+    const scale = Math.min(availW / smartImg.width, availH / smartImg.height);
+    const drawW = Math.round(smartImg.width * scale);
+    const drawH = Math.round(smartImg.height * scale);
+
+    canvas.width = drawW + pad * 2;
+    canvas.height = drawH + pad * 2;
+    smartGeom = { pad, drawW, drawH };
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Draw image
+    ctx.drawImage(smartImg, pad, pad, drawW, drawH);
+
+    const cPts = smartPts.map(p => ({
+      x: pad + p.x * drawW,
+      y: pad + p.y * drawH
+    }));
+
+    // 2. Darken outside polygon
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+    ctx.beginPath();
+    ctx.rect(pad, pad, drawW, drawH);
+    ctx.moveTo(cPts[0].x, cPts[0].y);
+    ctx.lineTo(cPts[1].x, cPts[1].y);
+    ctx.lineTo(cPts[2].x, cPts[2].y);
+    ctx.lineTo(cPts[3].x, cPts[3].y);
+    ctx.closePath();
+    ctx.fill('evenodd');
+    ctx.restore();
+
+    // 3. Perspective 3x3 internal guide lines
+    ctx.save();
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    [1 / 3, 2 / 3].forEach(t => {
+      const vTop = bilerp(cPts[0], cPts[1], cPts[2], cPts[3], t, 0);
+      const vBot = bilerp(cPts[0], cPts[1], cPts[2], cPts[3], t, 1);
+      ctx.beginPath(); ctx.moveTo(vTop.x, vTop.y); ctx.lineTo(vBot.x, vBot.y); ctx.stroke();
+
+      const hLeft = bilerp(cPts[0], cPts[1], cPts[2], cPts[3], 0, t);
+      const hRight = bilerp(cPts[0], cPts[1], cPts[2], cPts[3], 1, t);
+      ctx.beginPath(); ctx.moveTo(hLeft.x, hLeft.y); ctx.lineTo(hRight.x, hRight.y); ctx.stroke();
+    });
+    ctx.restore();
+
+    // 4. Main Quadrilateral Border
+    ctx.save();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(cPts[0].x, cPts[0].y);
+    ctx.lineTo(cPts[1].x, cPts[1].y);
+    ctx.lineTo(cPts[2].x, cPts[2].y);
+    ctx.lineTo(cPts[3].x, cPts[3].y);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+
+    // 5. Edge midpoint handles
+    for (let i = 0; i < 4; i++) {
+      const a = cPts[i];
+      const b = cPts[(i + 1) % 4];
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      ctx.beginPath();
+      ctx.arc(mx, my, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#059669';
+      ctx.stroke();
+    }
+
+    // 6. 4 Corner handles (large touch-friendly circles)
+    cPts.forEach((pt, idx) => {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 11, 0, Math.PI * 2);
+      ctx.fillStyle = idx === activeDragIdx ? '#ec4899' : '#10b981';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    });
+  }
+
+  function updateLoupe(normPt) {
+    const loupe = $('smartLoupeCanvas');
+    if (!loupe || !smartImg.width) return;
+    loupe.classList.remove('hidden');
+    // Move loupe to top-right if finger is in top-left
+    if (normPt.x < 0.42 && normPt.y < 0.42) {
+      loupe.style.left = 'auto';
+      loupe.style.right = '10px';
+    } else {
+      loupe.style.right = 'auto';
+      loupe.style.left = '10px';
+    }
+
+    const lctx = loupe.getContext('2d');
+    const lw = loupe.width, lh = loupe.height;
+    lctx.clearRect(0, 0, lw, lh);
+    lctx.fillStyle = '#0f172a';
+    lctx.fillRect(0, 0, lw, lh);
+
+    const srcX = normPt.x * smartImg.width;
+    const srcY = normPt.y * smartImg.height;
+    const zoomRadius = Math.max(24, Math.min(smartImg.width, smartImg.height) * 0.08);
+
+    lctx.drawImage(
+      smartImg,
+      srcX - zoomRadius, srcY - zoomRadius, zoomRadius * 2, zoomRadius * 2,
+      0, 0, lw, lh
+    );
+
+    // Crosshair inside loupe
+    lctx.strokeStyle = '#10b981';
+    lctx.lineWidth = 1.5;
+    lctx.beginPath();
+    lctx.moveTo(lw / 2, 0); lctx.lineTo(lw / 2, lh);
+    lctx.moveTo(0, lh / 2); lctx.lineTo(lw, lh / 2);
+    lctx.stroke();
+  }
+
+  function initSmartCanvasEvents() {
+    const canvas = $('smartCropCanvas');
+    if (!canvas || canvas.dataset.bound) return;
+    canvas.dataset.bound = '1';
+
+    function getCanvasPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    function onStart(e) {
+      if (!smartImg.width) return;
+      const pos = getCanvasPos(e);
+      const { pad, drawW, drawH } = smartGeom;
+      const cPts = smartPts.map(p => ({ x: pad + p.x * drawW, y: pad + p.y * drawH }));
+
+      // Find nearest corner (0..3)
+      let bestIdx = -1;
+      let bestDist = 36; // generous touch radius
+      cPts.forEach((pt, i) => {
+        const d = Math.hypot(pos.x - pt.x, pos.y - pt.y);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      });
+
+      // Check edge midpoints (4..7) if no corner was closer
+      if (bestIdx === -1) {
+        for (let i = 0; i < 4; i++) {
+          const a = cPts[i], b = cPts[(i + 1) % 4];
+          const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+          const d = Math.hypot(pos.x - mx, pos.y - my);
+          if (d < 30) { bestDist = d; bestIdx = 4 + i; break; }
+        }
+      }
+
+      if (bestIdx !== -1) {
+        if (e.cancelable) e.preventDefault();
+        activeDragIdx = bestIdx;
+        onMove(e);
+      }
+    }
+
+    function onMove(e) {
+      if (activeDragIdx === -1) return;
+      if (e.cancelable) e.preventDefault();
+      const pos = getCanvasPos(e);
+      const { pad, drawW, drawH } = smartGeom;
+      const nx = Math.max(0.0, Math.min(1.0, (pos.x - pad) / drawW));
+      const ny = Math.max(0.0, Math.min(1.0, (pos.y - pad) / drawH));
+
+      if (activeDragIdx < 4) {
+        smartPts[activeDragIdx] = { x: nx, y: ny };
+        updateLoupe(smartPts[activeDragIdx]);
+      } else {
+        // Edge midpoint: move the two endpoints along the axis
+        const edge = activeDragIdx - 4;
+        const i1 = edge;
+        const i2 = (edge + 1) % 4;
+        const midX = (smartPts[i1].x + smartPts[i2].x) / 2;
+        const midY = (smartPts[i1].y + smartPts[i2].y) / 2;
+        const dx = nx - midX;
+        const dy = ny - midY;
+        smartPts[i1].x = Math.max(0, Math.min(1, smartPts[i1].x + dx));
+        smartPts[i1].y = Math.max(0, Math.min(1, smartPts[i1].y + dy));
+        smartPts[i2].x = Math.max(0, Math.min(1, smartPts[i2].x + dx));
+        smartPts[i2].y = Math.max(0, Math.min(1, smartPts[i2].y + dy));
+        updateLoupe({ x: nx, y: ny });
+      }
+      drawSmartCrop();
+    }
+
+    function onEnd() {
+      activeDragIdx = -1;
+      const loupe = $('smartLoupeCanvas');
+      if (loupe) loupe.classList.add('hidden');
+      drawSmartCrop();
+    }
+
+    canvas.addEventListener('mousedown', onStart);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+
+    canvas.addEventListener('touchstart', onStart, { passive: false });
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  }
+
+  window.setSmartRatio = function(r) {
+    smartTargetRatio = r;
+    ['auto', 'nid', 'a4', 'passport', 'square'].forEach(k => {
+      const b = $('smartBtn_' + k);
+      if (!b) return;
+      const on = k === r;
+      b.className = on
+        ? 'smart-ratio-btn py-1.5 px-1.5 bg-emerald-600 text-white font-bold rounded-lg shadow-sm'
+        : 'smart-ratio-btn py-1.5 px-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg';
+    });
+  };
+
+  window.setCropMode = function(mode) {
+    cropMode = mode === 'normal' ? 'normal' : 'smart';
+    const bSmart = $('btnCropModeSmart');
+    const bNorm = $('btnCropModeNormal');
+    const secSmart = $('smartCropSection');
+    const secNorm = $('normalCropSection');
+
+    if (bSmart && bNorm) {
+      bSmart.className = cropMode === 'smart'
+        ? 'py-1.5 rounded-lg font-bold bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200 flex items-center justify-center gap-1';
+      bNorm.className = cropMode === 'normal'
+        ? 'py-1.5 rounded-lg font-bold bg-pink-600 text-white shadow-sm flex items-center justify-center gap-1'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200 flex items-center justify-center gap-1';
+    }
+    if (secSmart) secSmart.classList.toggle('hidden', cropMode !== 'smart');
+    if (secNorm) secNorm.classList.toggle('hidden', cropMode !== 'normal');
+
+    if (cropMode === 'normal') {
+      initNormalCropper();
+    } else {
+      drawSmartCrop();
+    }
+  };
+
+  function initNormalCropper() {
     const target = $('cropImgTarget');
     if (cropper) {
       cropper.destroy();
       cropper = null;
     }
+    const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
     target.onload = () => {
       cropper = new Cropper(target, {
         viewMode: 1,
@@ -793,8 +1106,26 @@
         }
       });
     };
-    const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
     target.src = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?t=${Date.now()}${sideParam}`;
+  }
+
+  function loadCropTargetImage() {
+    initSmartCanvasEvents();
+    resetSmartPtsDefault();
+    const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
+    const imgUrl = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?t=${Date.now()}${sideParam}`;
+
+    smartImg = new Image();
+    smartImg.crossOrigin = 'anonymous';
+    smartImg.onload = () => {
+      drawSmartCrop();
+      window.autoDetectSmartCorners();
+    };
+    smartImg.src = imgUrl;
+
+    if (cropMode === 'normal') {
+      initNormalCropper();
+    }
   }
 
   window.switchNidCropSide = function(side) {
@@ -818,6 +1149,10 @@
     const nidSwitch = $('nidCropSideSwitch');
     if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
     modal.classList.remove('hidden');
+
+    window.setSmartRatio(uploadedFile.is_nid ? 'nid' : 'auto');
+    window.setCropMode('smart');
+
     const chosenSide = (typeof side === 'string' && (side === 'front' || side === 'back')) ? side : 'front';
     if (uploadedFile.is_nid) {
       window.switchNidCropSide(chosenSide);
@@ -865,17 +1200,53 @@
     if (cropper) cropper.rotate(deg);
   };
 
-  window.applyCrop = function() {
-    if (!uploadedFile || !cropper) return;
+  window.applyCrop = async function() {
+    if (!uploadedFile) return;
     const btn = $('btnSaveCrop');
     btn.disabled = true;
-    btn.innerText = 'ক্রপ সংরক্ষিত হচ্ছে...';
+    btn.innerText = 'ক্রপ ও সোজা করা হচ্ছে...';
+
+    if (cropMode === 'smart') {
+      try {
+        const res = await fetch('/api/image/perspective-crop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file_id: uploadedFile.file_id,
+            side: cropNidSide,
+            points: smartPts,
+            ratio: smartTargetRatio
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeCropModal();
+          if (uploadedFile.is_nid) refreshNidInline();
+          else if (currentMode === 'studio') scheduleStudio();
+          alert('✓ ৪-কোণা স্মার্ট ক্রপ ও সোজা করা সফলভাবে সম্পন্ন হয়েছে!');
+        } else {
+          alert('স্মার্ট ক্রপ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        }
+      } catch (e) {
+        alert('সার্ভার এরর: ' + e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
+      }
+      return;
+    }
+
+    if (!cropper) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
+      return;
+    }
 
     cropper.getCroppedCanvas({ maxWidth: 2400, maxHeight: 2400 }).toBlob(async (blob) => {
       if (!blob) {
         alert('ক্যানভাস থেকে ছবি তৈরি করা যায়নি।');
         btn.disabled = false;
-        btn.innerHTML = '<span>✓</span> <span>ক্রপ সম্পন্ন করুন</span>';
+        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
         return;
       }
       const fd = new FormData();
@@ -901,7 +1272,7 @@
         alert('সার্ভার এরর: ' + e);
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '<span>✓</span> <span>ক্রপ সম্পন্ন করুন</span>';
+        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
       }
     }, 'image/jpeg', 0.95);
   };
