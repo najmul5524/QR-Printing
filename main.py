@@ -673,8 +673,8 @@ def nid_preview(token: str, color: str = "color", fit: str = "cover", rf: int = 
 
 
 @app.get("/api/preview/{file_id}")
-async def preview_file(file_id: str, side: str = "front"):
-    """Provides safe preview of the raw uploaded file."""
+def preview_file(file_id: str, side: str = "front", w: int = 0):
+    """Provides safe preview of the uploaded file, with optional fast resized width w for instant UI previews."""
     safe_id = os.path.basename(str(file_id or ""))
     if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = safe_id[4:]
@@ -683,6 +683,18 @@ async def preview_file(file_id: str, side: str = "front"):
     else:
         file_path = resolve_upload(safe_id)
     ext = utils.get_ext(file_path)
+    if w and 150 <= w <= 1600 and ext in ("jpg", "jpeg", "png", "webp"):
+        try:
+            with Image.open(file_path) as im:
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                if max(im.size) > w:
+                    im.thumbnail((w, w), Image.Resampling.BILINEAR)
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=82)
+                return Response(content=buf.getvalue(), media_type="image/jpeg",
+                                headers={"Cache-Control": "private, max-age=60"})
+        except Exception:
+            pass
     media_type = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                   "png": "image/png", "webp": "image/webp"}.get(ext, "application/octet-stream")
     return FileResponse(file_path, media_type=media_type,
@@ -825,12 +837,12 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
     orig = _ensure_orig_backup(src)
     with Image.open(orig) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        im.thumbnail((950, 950), Image.Resampling.LANCZOS)
+        im.thumbnail((720, 720), Image.Resampling.BILINEAR)
         if mode != "original":
             im = image_fx.camscanner_process(im, mode=mode)
         buf = io.BytesIO()
-        im.save(buf, "JPEG", quality=85)
-        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        im.save(buf, "JPEG", quality=80)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
 
 
 @app.post("/api/image/camscan")
@@ -1093,9 +1105,9 @@ def perspective_crop_preview_endpoint(payload: dict = Body(...)):
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio)
+        warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio, max_out_dim=1000)
         buf = io.BytesIO()
-        warped.save(buf, "JPEG", quality=90)
+        warped.save(buf, "JPEG", quality=82)
         return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 

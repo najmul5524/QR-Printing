@@ -24,37 +24,32 @@ def camscanner_process(img: Image.Image, mode: str = "magic_color", contrast: fl
     img = img.convert("RGB")
     w, h = img.size
 
-    if mode == "magic_color":
-        # Estimate background illumination using large blur
+    if mode in ("magic_color", "bw_doc"):
+        # Fast illumination estimation: downscale 4x before GaussianBlur, then upscale back (10x faster)
         gray = ImageOps.grayscale(img)
         gray_arr = np.array(gray, dtype=np.float32)
-        radius = max(15, min(w, h) // 25)
-        bg = np.array(gray.filter(ImageFilter.GaussianBlur(radius=radius)), dtype=np.float32)
+        small_w, small_h = max(32, w // 4), max(32, h // 4)
+        gray_small = gray.resize((small_w, small_h), Image.Resampling.BILINEAR)
+        small_radius = max(4, min(small_w, small_h) // 22)
+        bg_small = gray_small.filter(ImageFilter.GaussianBlur(radius=small_radius))
+        bg = np.array(bg_small.resize((w, h), Image.Resampling.BILINEAR), dtype=np.float32)
 
-        # Flatten shadows via division
-        flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255)
-
-        # Color restoration: keep saturation while brightening background to pure white
-        arr = np.array(img, dtype=np.float32)
-        norm_factor = (flattened / (gray_arr + 1.0))[:, :, np.newaxis]
-        enhanced = np.clip(arr * norm_factor, 0, 255).astype(np.uint8)
-        res = Image.fromarray(enhanced, mode="RGB")
-        res = ImageEnhance.Sharpness(res).enhance(1.6)
-        res = ImageEnhance.Contrast(res).enhance(contrast)
-        res = ImageEnhance.Brightness(res).enhance(brightness)
-        return res
-
-    elif mode == "bw_doc":
-        # High-contrast Black & White document (like laser photocopy)
-        gray = ImageOps.grayscale(img)
-        gray_arr = np.array(gray, dtype=np.float32)
-        radius = max(15, min(w, h) // 25)
-        bg = np.array(gray.filter(ImageFilter.GaussianBlur(radius=radius)), dtype=np.float32)
-        flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255).astype(np.uint8)
-        res = Image.fromarray(flattened, mode="L")
-        res = ImageOps.autocontrast(res, cutoff=(4, 4))
-        res = ImageEnhance.Sharpness(res).enhance(2.0)
-        return res.convert("RGB")
+        if mode == "magic_color":
+            flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255)
+            arr = np.array(img, dtype=np.float32)
+            norm_factor = (flattened / (gray_arr + 1.0))[:, :, np.newaxis]
+            enhanced = np.clip(arr * norm_factor, 0, 255).astype(np.uint8)
+            res = Image.fromarray(enhanced, mode="RGB")
+            res = ImageEnhance.Sharpness(res).enhance(1.6)
+            res = ImageEnhance.Contrast(res).enhance(contrast)
+            res = ImageEnhance.Brightness(res).enhance(brightness)
+            return res
+        else:
+            flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255).astype(np.uint8)
+            res = Image.fromarray(flattened, mode="L")
+            res = ImageOps.autocontrast(res, cutoff=(4, 4))
+            res = ImageEnhance.Sharpness(res).enhance(2.0)
+            return res.convert("RGB")
 
     elif mode == "grayscale":
         gray = ImageOps.grayscale(img)
@@ -213,7 +208,8 @@ def order_quad_points(pts: List[Tuple[float, float]]) -> List[Tuple[float, float
 def perspective_crop_4points(
     img: Image.Image,
     norm_points: List[Tuple[float, float]],
-    target_ratio: Optional[float] = None
+    target_ratio: Optional[float] = None,
+    max_out_dim: Optional[int] = None
 ) -> Image.Image:
     """
     CamScanner-style 4-point perspective warp (homography transform):
@@ -238,6 +234,11 @@ def perspective_crop_4points(
     if target_ratio and target_ratio > 0:
         out_h = max(24, int(round(out_w / target_ratio)))
 
+    if max_out_dim and max(out_w, out_h) > max_out_dim:
+        scale = float(max_out_dim) / float(max(out_w, out_h))
+        out_w = max(24, int(round(out_w * scale)))
+        out_h = max(24, int(round(out_h * scale)))
+
     dst = [
         (0.0, 0.0),
         (float(out_w), 0.0),
@@ -255,7 +256,8 @@ def perspective_crop_4points(
         rhs.append(y)
 
     coeffs = np.linalg.solve(np.array(matrix, dtype=np.float64), np.array(rhs, dtype=np.float64)).tolist()
-    warped = img.transform((out_w, out_h), Image.Transform.PERSPECTIVE, coeffs, Image.Resampling.BICUBIC)
+    resample = Image.Resampling.BILINEAR if max_out_dim else Image.Resampling.BICUBIC
+    warped = img.transform((out_w, out_h), Image.Transform.PERSPECTIVE, coeffs, resample)
     return warped
 
 

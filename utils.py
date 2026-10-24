@@ -107,7 +107,7 @@ def generate_shop_qr(shop_url: str) -> bytes:
 
 
 # ── Image helpers ───────────────────────────────────────────────────────────
-def normalize_image(src_path: str, dest_path: str, max_side: int = 3600) -> None:
+def normalize_image(src_path: str, dest_path: str, max_side: int = 2400) -> None:
     """
     Opens any supported image, fixes EXIF rotation, flattens transparency,
     limits the size and saves a clean RGB JPEG. Raises ValueError if unreadable.
@@ -123,8 +123,8 @@ def normalize_image(src_path: str, dest_path: str, max_side: int = 3600) -> None
             else:
                 im = im.convert("RGB")
             if max(im.size) > max_side:
-                im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-            im.save(dest_path, "JPEG", quality=92, dpi=(DPI, DPI))
+                im.thumbnail((max_side, max_side), Image.Resampling.BILINEAR)
+            im.save(dest_path, "JPEG", quality=88, optimize=True, dpi=(DPI, DPI))
     except Exception as e:
         raise ValueError(f"ছবিটি পড়া যাচ্ছে না: {e}")
 
@@ -240,12 +240,12 @@ def save_nid_sheet(front_path: str, back_path: str, output_path: str, **kwargs) 
     return output_path
 
 
-def nid_preview_jpeg(front_path: str, back_path: str, width: int = 900, **kwargs) -> bytes:
+def nid_preview_jpeg(front_path: str, back_path: str, width: int = 800, **kwargs) -> bytes:
     sheet = build_nid_sheet(front_path, back_path, **kwargs)
     h = int(sheet.height * width / sheet.width)
-    sheet = sheet.resize((width, h), Image.Resampling.LANCZOS)
+    sheet = sheet.resize((width, h), Image.Resampling.BILINEAR)
     buf = io.BytesIO()
-    sheet.save(buf, "JPEG", quality=85)
+    sheet.save(buf, "JPEG", quality=80)
     return buf.getvalue()
 
 
