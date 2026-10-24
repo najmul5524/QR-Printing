@@ -769,6 +769,35 @@ async def camscan_image_endpoint(payload: dict = Body(...)):
     return {"success": True, "file_id": file_id}
 
 
+@app.post("/api/file/rotate")
+async def rotate_file_endpoint(payload: dict = Body(...)):
+    """Rotates an image or PDF file by 90 degrees clockwise."""
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    ext = utils.get_ext(src)
+
+    if ext in ("jpg", "jpeg", "png", "webp"):
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            rotated = im.rotate(-90, expand=True)
+            rotated.save(src, "JPEG" if ext in ("jpg", "jpeg") else "PNG", quality=95)
+    elif ext == "pdf":
+        import pypdf
+        reader = pypdf.PdfReader(src)
+        writer = pypdf.PdfWriter()
+        for p in reader.pages:
+            p.rotate(90)
+            writer.add_page(p)
+        temp_out = src + ".rot.tmp"
+        with open(temp_out, "wb") as f_out:
+            writer.write(f_out)
+        os.replace(temp_out, src)
+    else:
+        raise HTTPException(status_code=400, detail="Cannot rotate this file format")
+
+    return {"success": True, "file_id": file_id}
+
+
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
     data = await request.json()
@@ -787,6 +816,7 @@ async def customer_create_order(request: Request):
     color_mode = clean_choice(data.get("color_mode"), ("bw", "color"), "bw")
     duplex = clean_choice(data.get("duplex"), ("single", "double"), "single")
     paper_size = clean_choice(data.get("paper_size"), ("A4", "4x6", "NID", "PHOTO"), "A4")
+    orientation = clean_choice(data.get("orientation"), ("portrait", "landscape"), "portrait")
     payment_method = clean_choice(data.get("payment_method"), ("counter_cash", "bkash", "nagad"), "counter_cash")
     try:
         pages_per_sheet = int(data.get("pages_per_sheet", 1))

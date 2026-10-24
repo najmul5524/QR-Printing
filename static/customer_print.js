@@ -789,7 +789,6 @@
 
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
-})();
 
   // ── Crop Modal Logic ──
   window.openCropModal = function() {
@@ -886,3 +885,45 @@
   if (btnCropTrigger) btnCropTrigger.addEventListener('click', window.openCropModal);
   const btnCamTrigger = $('btnOpenCamScan');
   if (btnCamTrigger) btnCamTrigger.addEventListener('click', window.openCamscanModal);
+
+  // ── Rotate File Logic (Image / PDF 90° clockwise) ──
+  async function rotateFile() {
+    if (!uploadedFile) return;
+    const btn = $('btnRotateFile');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/file/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_id: uploadedFile.file_id })
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (currentMode === 'studio') {
+          scheduleStudio();
+        } else {
+          // Refresh inline preview if present
+          if (uploadedFile.is_nid) refreshNidInline();
+        }
+        alert('ফাইল সফলভাবে ৯০° ঘোরানো হয়েছে!');
+      } else {
+        alert('ঘোরানো ব্যর্থ হয়েছে: ' + (data.detail || ''));
+      }
+    } catch (e) {
+      alert('সার্ভার এরর: ' + e);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  const btnRotTrigger = $('btnRotateFile');
+  if (btnRotTrigger) btnRotTrigger.addEventListener('click', rotateFile);
+
+  // ── Orientation selection (Portrait vs Landscape) ──
+  ['optPortrait', 'optLandscape'].forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('click', () => selectRadio(id));
+  });
+
+})();
+

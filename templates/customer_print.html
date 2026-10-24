@@ -115,6 +115,9 @@
           </div>
         </div>
         <div class="flex items-center gap-1.5 shrink-0">
+          <button type="button" id="btnRotateFile" class="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ফাইল ৯০° ঘোরান">
+            <span>↻</span> <span>ঘোরান</span>
+          </button>
           <button type="button" id="btnOpenCrop" class="hidden px-2.5 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ছবি ক্রপ করুন">
             <span>✂️</span> <span>ক্রপ</span>
           </button>
@@ -209,6 +212,33 @@
               <input type="radio" name="nid_fit" value="contain" class="hidden">
               <p class="text-sm font-bold">🖼️ পুরো ছবি (Fit)</p>
               <p class="text-[10px] text-gray-500">কিছু কাটা যাবে না</p>
+            </label>
+          </div>
+        </div>
+
+        <!-- Orientation: Portrait vs Landscape -->
+        <div id="orientationWrapper">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">প্রিন্ট মোড / ওরিয়েন্টেশন (Orientation)</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-pink-600 bg-pink-50 text-pink-900" id="optPortrait">
+              <input type="radio" name="orientation" value="portrait" checked class="hidden">
+              <div class="flex items-center gap-2">
+                <span class="text-base">📱</span>
+                <div>
+                  <p class="text-sm font-bold">লম্বালম্বি (Portrait)</p>
+                  <p class="text-[10px] text-gray-500">স্ট্যান্ডার্ড খাড়া পেজ</p>
+                </div>
+              </div>
+            </label>
+            <label class="border-2 rounded-xl p-2.5 flex items-center justify-between cursor-pointer border-gray-200 text-gray-700" id="optLandscape">
+              <input type="radio" name="orientation" value="landscape" class="hidden">
+              <div class="flex items-center gap-2">
+                <span class="text-base">🖥️</span>
+                <div>
+                  <p class="text-sm font-bold">আড়াআড়ি (Landscape)</p>
+                  <p class="text-[10px] text-gray-500">প্রশস্ত ও ওয়াইড পেজ</p>
+                </div>
+              </div>
             </label>
           </div>
         </div>
@@ -704,6 +734,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2"></script>
+  <script src="/static/customer_print.js?v=1792813435"></script>
 </body>
 </html>
