@@ -225,11 +225,9 @@
     const btnCrop = $('btnOpenCrop');
     const btnCam = $('btnOpenCamScan');
     const btnRbg = $('btnOpenRemoveBg');
-    const btnDress = $('btnOpenDress');
     if (btnCrop) btnCrop.classList.toggle('hidden', !isImg);
     if (btnCam) btnCam.classList.toggle('hidden', !isImg);
     if (btnRbg) btnRbg.classList.toggle('hidden', !isImg);
-    if (btnDress) btnDress.classList.toggle('hidden', !isImg);
 
     if (currentMode === 'studio') {
       studioCard.classList.remove('opacity-60', 'pointer-events-none');
@@ -298,6 +296,7 @@
   setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], calculateBill);
   setupRadioGroup(['optBw', 'optColor'], () => { calculateBill(); refreshNidInline(); });
   setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
+  setupRadioGroup(['optPortrait', 'optLandscape'], calculateBill);
   setupRadioGroup(['optFitCover', 'optFitContain'], refreshNidInline);
   setupRadioGroup(['payMethodCash', 'payMethodBkash', 'payMethodNagad'], () => {
     const method = checked('payment_method');
@@ -438,24 +437,22 @@
       contrast: +$('studioContrast').value,
       bw: $('studioBw').value === '1',
       border: $('studioBorder').checked,
-      bg: studioBg,
-      tol: +$('studioTol').value,
+      bg: 'none',
+      tol: 45,
       zoom: +$('studioZoom').value / 100,
       ox: +$('studioOx').value / 100,
       oy: +$('studioOy').value / 100,
-      suit: studioSuit,
-      suit_zoom: +($('suitZoom') ? $('suitZoom').value : 100) / 100,
-      suit_ox: +($('suitOx') ? $('suitOx').value : 0) / 100,
-      suit_oy: +($('suitOy') ? $('suitOy').value : 0) / 100
+      suit: 'none',
+      suit_zoom: 1,
+      suit_ox: 0,
+      suit_oy: 0
     };
   }
 
   function scheduleStudio() {
     $('valBrightness').innerText = $('studioBrightness').value;
     $('valContrast').innerText = $('studioContrast').value;
-    $('valTol').innerText = $('studioTol').value;
     $('valZoom').innerText = (+$('studioZoom').value / 100).toFixed(1) + '×';
-    $('studioTolWrap').classList.toggle('hidden', studioBg === 'none');
     calculateBill();
     clearTimeout(studioTimer);
     studioTimer = setTimeout(() => refreshStudio(false), 250);
@@ -474,7 +471,7 @@
       if (!res.ok) throw new Error('preview failed');
       const info = JSON.parse(res.headers.get('X-Studio-Info') || '{}');
       const blob = await res.blob();
-      if (my !== studioReq) return;               // a newer request is already on its way
+      if (my !== studioReq) return;
       if (studioBlobUrl) URL.revokeObjectURL(studioBlobUrl);
       studioBlobUrl = URL.createObjectURL(blob);
       $('studioPreviewImg').src = studioBlobUrl;
@@ -491,52 +488,17 @@
     if (!studioInited) {
       studioInited = true;
       renderStudioItems();
-      ['studioBrightness', 'studioContrast', 'studioTol', 'studioZoom', 'studioOx', 'studioOy'].forEach((id) => $(id).addEventListener('input', scheduleStudio));
-      ['studioPaper', 'studioBw', 'studioFill', 'studioBorder'].forEach((id) => $(id).addEventListener('change', scheduleStudio));
-      const suitPicker = $('suitPicker');
-      if (suitPicker) {
-        suitPicker.addEventListener('click', (e) => {
-          const b = e.target.closest('[data-suit]');
-          if (!b) return;
-          studioSuit = b.dataset.suit;
-          document.querySelectorAll('.suit-btn').forEach(el => {
-            const on = el.dataset.suit === studioSuit;
-            el.classList.toggle('border-pink-600', on);
-            el.classList.toggle('bg-pink-50', on);
-            el.classList.toggle('border-gray-200', !on);
-            el.classList.toggle('bg-gray-50', !on);
-          });
-          const adj = $('suitAdjustWrap');
-          if (adj) adj.classList.toggle('hidden', studioSuit === 'none');
-          scheduleStudio();
-        });
-        ['suitZoom', 'suitOx', 'suitOy'].forEach(id => {
-          const el = $(id);
-          if (el) el.addEventListener('input', scheduleStudio);
-        });
-      }
-
-      $('studioBgBtns').addEventListener('click', (e) => {
-        const b = e.target.closest('[data-bg]');
-        if (!b) return;
-        setStudioBg(b.dataset.bg);
+      ['studioBrightness', 'studioContrast', 'studioZoom', 'studioOx', 'studioOy'].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener('input', scheduleStudio);
       });
-      $('studioBgCustom').addEventListener('input', (e) => setStudioBg(e.target.value));
+      ['studioPaper', 'studioBw', 'studioFill', 'studioBorder'].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener('change', scheduleStudio);
+      });
       $('btnStudioMinus').addEventListener('click', () => { const v = +$('studioCopies').value; if (v > 1) { $('studioCopies').value = v - 1; scheduleStudio(); } });
       $('btnStudioPlus').addEventListener('click', () => { const v = +$('studioCopies').value; if (v < 100) { $('studioCopies').value = v + 1; scheduleStudio(); } });
     }
-    scheduleStudio();
-  }
-
-  function setStudioBg(v) {
-    studioBg = v;
-    document.querySelectorAll('#studioBgBtns .bg-chip').forEach((el) => {
-      const on = el.dataset.bg === v;
-      el.classList.toggle('border-pink-600', on);
-      el.classList.toggle('border-gray-300', !on && el.tagName === 'BUTTON' && el.dataset.bg !== 'none');
-      el.classList.toggle('ring-2', on && el.dataset.bg !== 'none');
-      el.classList.toggle('ring-pink-300', on && el.dataset.bg !== 'none');
-    });
     scheduleStudio();
   }
 
@@ -809,15 +771,13 @@
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
 
-  // ── Cropper.js Integration ──
+  // ── Cropper.js Integration (Supports both Normal Image & NID Front/Back) ──
   let cropper = null;
   let activeRatio = 'free';
+  let cropNidSide = 'front';
 
-  window.openCropModal = function() {
-    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
-    const modal = $('cropModal');
+  function loadCropTargetImage() {
     const target = $('cropImgTarget');
-    modal.classList.remove('hidden');
     if (cropper) {
       cropper.destroy();
       cropper = null;
@@ -825,15 +785,45 @@
     target.onload = () => {
       cropper = new Cropper(target, {
         viewMode: 1,
-        autoCropArea: 0.9,
+        autoCropArea: 0.92,
         responsive: true,
         background: false,
         ready() {
-          setCropRatio('free');
+          setCropRatio(uploadedFile && uploadedFile.is_nid ? 'nid' : 'free');
         }
       });
     };
-    target.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
+    const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
+    target.src = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?t=${Date.now()}${sideParam}`;
+  }
+
+  window.switchNidCropSide = function(side) {
+    cropNidSide = side === 'back' ? 'back' : 'front';
+    const bf = $('btnCropSideFront');
+    const bb = $('btnCropSideBack');
+    if (bf && bb) {
+      bf.className = cropNidSide === 'front'
+        ? 'py-1.5 rounded-lg font-bold bg-pink-600 text-white shadow-sm'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200';
+      bb.className = cropNidSide === 'back'
+        ? 'py-1.5 rounded-lg font-bold bg-pink-600 text-white shadow-sm'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200';
+    }
+    loadCropTargetImage();
+  };
+
+  window.openCropModal = function(side) {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('cropModal');
+    const nidSwitch = $('nidCropSideSwitch');
+    if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
+    modal.classList.remove('hidden');
+    const chosenSide = (typeof side === 'string' && (side === 'front' || side === 'back')) ? side : 'front';
+    if (uploadedFile.is_nid) {
+      window.switchNidCropSide(chosenSide);
+    } else {
+      loadCropTargetImage();
+    }
   };
 
   window.closeCropModal = function() {
@@ -849,10 +839,10 @@
     activeRatio = ratio;
     const btns = {
       free: $('cropBtnFree'),
+      nid: $('cropBtnNid'),
       passport: $('cropBtnPassport'),
       stamp: $('cropBtnStamp'),
-      square: $('cropBtnSquare'),
-      '4x6': $('cropBtn4x6')
+      square: $('cropBtnSquare')
     };
     Object.keys(btns).forEach(k => {
       const b = btns[k];
@@ -864,10 +854,10 @@
     });
 
     if (!cropper) return;
-    if (ratio === 'passport') cropper.setAspectRatio(35 / 45);
+    if (ratio === 'nid') cropper.setAspectRatio(85.6 / 54);
+    else if (ratio === 'passport') cropper.setAspectRatio(35 / 45);
     else if (ratio === 'stamp') cropper.setAspectRatio(20 / 25);
     else if (ratio === 'square') cropper.setAspectRatio(1);
-    else if (ratio === '4x6') cropper.setAspectRatio(4 / 6);
     else cropper.setAspectRatio(NaN);
   };
 
@@ -890,6 +880,7 @@
       }
       const fd = new FormData();
       fd.append('file_id', uploadedFile.file_id);
+      fd.append('side', cropNidSide);
       fd.append('file', blob, 'cropped.jpg');
 
       try {
@@ -900,7 +891,8 @@
         const data = await res.json();
         if (data.success) {
           closeCropModal();
-          if (currentMode === 'studio') scheduleStudio();
+          if (uploadedFile.is_nid) refreshNidInline();
+          else if (currentMode === 'studio') scheduleStudio();
           alert('✓ ছবি সফলভাবে ক্রপ সম্পন্ন হয়েছে!');
         } else {
           alert('ক্রপ সংরক্ষণ ব্যর্থ হয়েছে: ' + (data.detail || ''));
@@ -914,101 +906,121 @@
     }, 'image/jpeg', 0.95);
   };
 
-  // ── CamScanner Enhancer Logic ──
+  // ── CamScanner Enhancer with Live Before/After Preview ──
+  let currentCamscanMode = 'magic_color';
+  const CAM_LABELS = {
+    original: '🖼️ আসল ছবি (Original)',
+    magic_color: '✨ ম্যাজিক কালার',
+    bw_doc: '🖨️ ফটোকপি (B&W)',
+    grayscale: '◐ গ্রে-স্কেল'
+  };
+
   window.openCamscanModal = function() {
     if (!uploadedFile || uploadedFile.file_type !== 'image') return;
     const modal = $('camscanModal');
     if (modal) modal.classList.remove('hidden');
+    window.selectCamscanMode('magic_color');
   };
+
   window.closeCamscanModal = function() {
     const modal = $('camscanModal');
     if (modal) modal.classList.add('hidden');
   };
-  window.applyCamscanEffect = async function(mode) {
+
+  window.selectCamscanMode = function(mode) {
     if (!uploadedFile) return;
+    currentCamscanMode = mode;
+    ['original', 'magic_color', 'bw_doc', 'grayscale'].forEach(m => {
+      const b = $('camBtn_' + m);
+      if (!b) return;
+      const on = m === mode;
+      b.className = on
+        ? 'cam-mode-btn p-2 border-2 border-emerald-600 bg-emerald-50 text-emerald-900 rounded-xl font-bold shadow-sm'
+        : 'cam-mode-btn p-2 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700';
+    });
+
+    const badge = $('camscanModeBadge');
+    if (badge) badge.innerText = CAM_LABELS[mode] || mode;
+
+    const img = $('camscanPreviewImg');
+    const loader = $('camscanLoading');
+    if (img && loader) {
+      loader.classList.remove('hidden');
+      img.classList.add('hidden');
+      img.onload = () => {
+        loader.classList.add('hidden');
+        img.classList.remove('hidden');
+      };
+      img.onerror = () => {
+        loader.innerText = '⚠️ প্রিভিউ লোড করা যায়নি';
+      };
+      img.src = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(mode)}&t=${Date.now()}`;
+    }
+  };
+
+  window.saveCamscanEffect = async function() {
+    if (!uploadedFile) return;
+    const btn = $('btnSaveCamscan');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerText = 'সেভ হচ্ছে...';
+    }
     try {
       const res = await fetch('/api/image/camscan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           file_id: uploadedFile.file_id,
-          mode: mode
+          mode: currentCamscanMode
         })
       });
       const data = await res.json();
       if (data.success) {
         closeCamscanModal();
-        if (currentMode === 'studio') scheduleStudio();
-        alert('✓ CamScanner ইফেক্ট সফলভাবে প্রয়োগ করা হয়েছে!');
+        if (uploadedFile.is_nid) refreshNidInline();
+        else if (currentMode === 'studio') scheduleStudio();
+        alert('✓ স্ক্যান ইফেক্ট সফলভাবে সেভ হয়েছে!');
       } else {
         alert('স্ক্যানার ইফেক্ট ব্যর্থ: ' + (data.detail || ''));
       }
     } catch (e) {
       alert('স্ক্যানার ইফেক্ট প্রয়োগ ব্যর্থ হয়েছে: ' + e);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>স্ক্যান সেভ করুন</span>';
+      }
     }
   };
 
-  // ── Remove Background Modal Logic ──
-  let selectedRbgColor = '#ffffff';
+  // ── Direct remove.bg Website Bridge Modal Logic ──
+  let rbgNidSide = 'front';
+
+  window.switchNidRbgSide = function(side) {
+    rbgNidSide = side === 'back' ? 'back' : 'front';
+    const bf = $('btnRbgSideFront');
+    const bb = $('btnRbgSideBack');
+    if (bf && bb) {
+      bf.className = rbgNidSide === 'front'
+        ? 'py-1.5 rounded-lg font-bold bg-indigo-600 text-white shadow-sm'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200';
+      bb.className = rbgNidSide === 'back'
+        ? 'py-1.5 rounded-lg font-bold bg-indigo-600 text-white shadow-sm'
+        : 'py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200';
+    }
+  };
 
   window.openRemoveBgModal = function() {
     if (!uploadedFile || uploadedFile.file_type !== 'image') return;
     const modal = $('removeBgModal');
+    const nidSwitch = $('nidRbgSideSwitch');
+    if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
     if (modal) modal.classList.remove('hidden');
   };
 
   window.closeRemoveBgModal = function() {
     const modal = $('removeBgModal');
     if (modal) modal.classList.add('hidden');
-  };
-
-  const rbgBtns = $('removeBgColorBtns');
-  if (rbgBtns) {
-    rbgBtns.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-bg]');
-      if (!b) return;
-      selectedRbgColor = b.dataset.bg;
-      document.querySelectorAll('#removeBgColorBtns .rbg-color-btn').forEach(btn => {
-        const on = btn.dataset.bg === selectedRbgColor;
-        btn.classList.toggle('border-purple-600', on);
-        btn.classList.toggle('bg-purple-50', on);
-        btn.classList.toggle('border-gray-200', !on);
-      });
-    });
-  }
-
-  window.runRemoveBgAI = async function() {
-    if (!uploadedFile) return;
-    const btn = $('btnRunRemoveBg');
-    const txt = $('runRemoveBgText');
-    btn.disabled = true;
-    txt.innerText = 'ব্যাকগ্রাউন্ড রিমুভ ও প্রসেসিং হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন';
-
-    try {
-      const res = await fetch('/api/image/remove-bg', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file_id: uploadedFile.file_id,
-          bg_color: selectedRbgColor,
-          shop_id: SHOP_ID,
-          tol: 45
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        closeRemoveBgModal();
-        if (currentMode === 'studio') scheduleStudio();
-        alert(`✓ ব্যাকগ্রাউন্ড সফলভাবে পরিবর্তন করা হয়েছে! (${data.engine || 'AI Engine'})`);
-      } else {
-        alert('রিমুভ ব্যর্থ হয়েছে: ' + (data.detail || ''));
-      }
-    } catch (e) {
-      alert('সার্ভার এরর: ' + e);
-    } finally {
-      btn.disabled = false;
-      txt.innerText = 'ব্যাকগ্রাউন্ড রিমুভ ও রঙ পরিবর্তন করুন';
-    }
   };
 
   const cutoutInput = $('cutoutFileInput');
@@ -1018,8 +1030,9 @@
       if (!f || !uploadedFile) return;
       const fd = new FormData();
       fd.append('file_id', uploadedFile.file_id);
+      fd.append('side', rbgNidSide);
       fd.append('file', f);
-      fd.append('bg_color', selectedRbgColor);
+      fd.append('bg_color', '#ffffff');
 
       try {
         const res = await fetch('/api/image/replace-cutout', {
@@ -1029,8 +1042,9 @@
         const data = await res.json();
         if (data.success) {
           closeRemoveBgModal();
-          if (currentMode === 'studio') scheduleStudio();
-          alert('✓ remove.bg থেকে কাটআউট ছবি সফলভাবে যুক্ত হয়েছে!');
+          if (uploadedFile.is_nid) refreshNidInline();
+          else if (currentMode === 'studio') scheduleStudio();
+          alert('✓ remove.bg থেকে ডাউনলোড করা ছবি সফলভাবে যুক্ত হয়েছে!');
         } else {
           alert('আপলোড ব্যর্থ হয়েছে: ' + (data.detail || ''));
         }
@@ -1042,167 +1056,15 @@
     });
   }
 
-  // ── Dress Change Modal Logic ──
-  let selectedModalSuit = 'suit1';
-  let modalPhotoImg = new Image();
-  let modalSuitImg = new Image();
-
-  window.openDressModal = function() {
-    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
-    const modal = $('dressModal');
-    if (modal) modal.classList.remove('hidden');
-    modalPhotoImg.crossOrigin = 'anonymous';
-    modalPhotoImg.onload = () => drawDressCanvas();
-    modalPhotoImg.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
-    loadSuitImage(selectedModalSuit);
-  };
-
-  window.closeDressModal = function() {
-    const modal = $('dressModal');
-    if (modal) modal.classList.add('hidden');
-  };
-
-  function loadSuitImage(suitId) {
-    selectedModalSuit = suitId;
-    modalSuitImg.crossOrigin = 'anonymous';
-    modalSuitImg.onload = () => drawDressCanvas();
-    renderSuitVectorToImage(suitId);
-  }
-
-  function renderSuitVectorToImage(suitId) {
-    const c = document.createElement('canvas');
-    c.width = 400; c.height = 400;
-    const ctx = c.getContext('2d');
-    drawSuitVector(ctx, suitId, 400, 400);
-    modalSuitImg.src = c.toDataURL();
-  }
-
-  function drawSuitVector(ctx, suitId, w, h) {
-    ctx.clearRect(0, 0, w, h);
-    if (suitId === 'suit2') {
-      ctx.fillStyle = '#e0f2fe'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(250, 110); ctx.lineTo(215, 280); ctx.lineTo(185, 280); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#f59e0b'; ctx.beginPath(); ctx.moveTo(190, 140); ctx.lineTo(210, 140); ctx.lineTo(216, 165); ctx.lineTo(184, 165); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#d97706'; ctx.beginPath(); ctx.moveTo(186, 165); ctx.lineTo(214, 165); ctx.lineTo(220, 340); ctx.lineTo(200, 375); ctx.lineTo(180, 340); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#1e3a8a'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(40, 165); ctx.lineTo(10, 400); ctx.lineTo(390, 400); ctx.lineTo(360, 165); ctx.lineTo(250, 110); ctx.lineTo(225, 230); ctx.lineTo(200, 280); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#1e40af'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(90, 180); ctx.lineTo(165, 225); ctx.lineTo(180, 270); ctx.lineTo(200, 280); ctx.lineTo(190, 240); ctx.lineTo(160, 170); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(250, 110); ctx.lineTo(310, 180); ctx.lineTo(235, 225); ctx.lineTo(220, 270); ctx.lineTo(200, 280); ctx.lineTo(210, 240); ctx.lineTo(240, 170); ctx.closePath(); ctx.fill();
-    } else if (suitId === 'suit3') {
-      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(140, 105); ctx.lineTo(45, 170); ctx.lineTo(15, 400); ctx.lineTo(385, 400); ctx.lineTo(355, 170); ctx.lineTo(260, 105); ctx.lineTo(225, 230); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#cbd5e1'; ctx.stroke();
-      ctx.fillStyle = '#f8fafc'; ctx.fillRect(188, 160, 24, 240);
-      ctx.beginPath(); ctx.moveTo(140, 105); ctx.lineTo(190, 165); ctx.lineTo(175, 185); ctx.lineTo(130, 120); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(260, 105); ctx.lineTo(210, 165); ctx.lineTo(225, 185); ctx.lineTo(270, 120); ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else if (suitId === 'suit4') {
-      ctx.fillStyle = '#f8fafc'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(255, 115); ctx.lineTo(210, 260); ctx.lineTo(190, 260); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#1e293b'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(45, 165); ctx.lineTo(20, 400); ctx.lineTo(380, 400); ctx.lineTo(355, 165); ctx.lineTo(255, 115); ctx.lineTo(220, 240); ctx.lineTo(180, 240); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#334155'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(95, 185); ctx.lineTo(170, 225); ctx.lineTo(185, 280); ctx.lineTo(200, 290); ctx.lineTo(190, 245); ctx.lineTo(160, 175); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(255, 115); ctx.lineTo(305, 185); ctx.lineTo(230, 225); ctx.lineTo(215, 280); ctx.lineTo(200, 290); ctx.lineTo(210, 245); ctx.lineTo(240, 175); ctx.closePath(); ctx.fill();
-    } else {
-      ctx.fillStyle = '#f8fafc'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(250, 110); ctx.lineTo(215, 280); ctx.lineTo(185, 280); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#b91c1c'; ctx.beginPath(); ctx.moveTo(190, 140); ctx.lineTo(210, 140); ctx.lineTo(216, 165); ctx.lineTo(184, 165); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#991b1b'; ctx.beginPath(); ctx.moveTo(186, 165); ctx.lineTo(214, 165); ctx.lineTo(220, 340); ctx.lineTo(200, 375); ctx.lineTo(180, 340); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#0f172a'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(40, 165); ctx.lineTo(10, 400); ctx.lineTo(390, 400); ctx.lineTo(360, 165); ctx.lineTo(250, 110); ctx.lineTo(225, 230); ctx.lineTo(200, 280); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#1e293b'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(90, 180); ctx.lineTo(165, 225); ctx.lineTo(180, 270); ctx.lineTo(200, 280); ctx.lineTo(190, 240); ctx.lineTo(160, 170); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(250, 110); ctx.lineTo(310, 180); ctx.lineTo(235, 225); ctx.lineTo(220, 270); ctx.lineTo(200, 280); ctx.lineTo(210, 240); ctx.lineTo(240, 170); ctx.closePath(); ctx.fill();
-    }
-  }
-
-  function drawDressCanvas() {
-    const canvas = $('dressCanvas');
-    if (!canvas || !modalPhotoImg.width) return;
-    const ctx = canvas.getContext('2d');
-    const pw = modalPhotoImg.width;
-    const ph = modalPhotoImg.height;
-    canvas.width = pw;
-    canvas.height = ph;
-    ctx.clearRect(0, 0, pw, ph);
-    ctx.drawImage(modalPhotoImg, 0, 0);
-
-    const zoom = (+$('mDressZoom').value) / 100;
-    const ox = (+$('mDressOx').value) / 100;
-    const oy = (+$('mDressOy').value) / 100;
-
-    $('lblDressZoom').innerText = Math.round(zoom * 100) + '%';
-    $('lblDressOx').innerText = $('mDressOx').value;
-    $('lblDressOy').innerText = $('mDressOy').value;
-
-    const sw = pw * 1.05 * zoom;
-    const sh = ph * 0.9 * zoom;
-    const sx = (pw - sw) / 2 + ox * (pw / 2);
-    const sy = ph * 0.45 + oy * (ph / 2);
-
-    ctx.drawImage(modalSuitImg, sx, sy, sw, sh);
-  }
-
-  ['mDressZoom', 'mDressOx', 'mDressOy'].forEach(id => {
-    const el = $(id);
-    if (el) el.addEventListener('input', drawDressCanvas);
-  });
-
-  const suitSelBox = $('modalSuitSelector');
-  if (suitSelBox) {
-    suitSelBox.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-suit]');
-      if (!b) return;
-      loadSuitImage(b.dataset.suit);
-      document.querySelectorAll('#modalSuitSelector .modal-suit-btn').forEach(btn => {
-        const on = btn.dataset.suit === b.dataset.suit;
-        btn.classList.toggle('border-pink-600', on);
-        btn.classList.toggle('bg-pink-50', on);
-        btn.classList.toggle('border-gray-200', !on);
-        btn.classList.toggle('bg-gray-50', !on);
-      });
-    });
-  }
-
-  window.applyDressToPhoto = async function() {
-    if (!uploadedFile) return;
-    const btn = $('btnSaveDress');
-    btn.disabled = true;
-    btn.innerText = 'পোশাক যুক্ত হচ্ছে...';
-
-    const zoom = (+$('mDressZoom').value) / 100;
-    const ox = (+$('mDressOx').value) / 100;
-    const oy = (+$('mDressOy').value) / 100;
-
-    try {
-      const res = await fetch('/api/image/apply-suit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file_id: uploadedFile.file_id,
-          suit_id: selectedModalSuit,
-          zoom: zoom,
-          ox: ox,
-          oy: oy
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        closeDressModal();
-        if (currentMode === 'studio') scheduleStudio();
-        alert('✓ ছবিতে সফলভাবে ফরমাল ড্রেস যুক্ত করা হয়েছে!');
-      } else {
-        alert('ড্রেস যুক্ত করা ব্যর্থ হয়েছে: ' + (data.detail || ''));
-      }
-    } catch (e) {
-      alert('সার্ভার এরর: ' + e);
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<span>✓</span> <span>পোশাক যুক্ত করুন</span>';
-    }
-  };
-
   // ── Button triggers for header bar ──
   const btnCropTrigger = $('btnOpenCrop');
-  if (btnCropTrigger) btnCropTrigger.addEventListener('click', window.openCropModal);
+  if (btnCropTrigger) btnCropTrigger.addEventListener('click', () => window.openCropModal('front'));
   const btnCamTrigger = $('btnOpenCamScan');
   if (btnCamTrigger) btnCamTrigger.addEventListener('click', window.openCamscanModal);
   const btnRbgTrigger = $('btnOpenRemoveBg');
   if (btnRbgTrigger) btnRbgTrigger.addEventListener('click', window.openRemoveBgModal);
-  const btnDressTrigger = $('btnOpenDress');
-  if (btnDressTrigger) btnDressTrigger.addEventListener('click', window.openDressModal);
 
-  // ── Rotate File Logic (Image / PDF 90° clockwise) ──
+  // ── Rotate File Logic (Image / NID / PDF 90° clockwise) ──
   async function rotateFile(showAlert = true) {
     if (!uploadedFile) return;
     const btn = $('btnRotateFile');
@@ -1217,8 +1079,8 @@
       if (data.success) {
         if (currentMode === 'studio') {
           scheduleStudio();
-        } else {
-          if (uploadedFile.is_nid) refreshNidInline();
+        } else if (uploadedFile.is_nid) {
+          refreshNidInline();
         }
         if (showAlert) alert('✓ ফাইল সফলভাবে ৯০° ঘোরানো হয়েছে!');
       } else {
@@ -1255,11 +1117,4 @@
     });
   }
 
-  // ── Orientation selection (Portrait vs Landscape) ──
-  ['optPortrait', 'optLandscape'].forEach(id => {
-    const el = $(id);
-    if (el) el.addEventListener('click', () => selectRadio(id));
-  });
-
 })();
-

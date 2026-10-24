@@ -673,9 +673,15 @@ def nid_preview(token: str, color: str = "color", fit: str = "cover", rf: int = 
 
 
 @app.get("/api/preview/{file_id}")
-async def preview_file(file_id: str):
+async def preview_file(file_id: str, side: str = "front"):
     """Provides safe preview of the raw uploaded file."""
-    file_path = resolve_upload(file_id)
+    safe_id = os.path.basename(str(file_id or ""))
+    if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = safe_id[4:]
+        front, back = nid_paths(token)
+        file_path = back if side == "back" else front
+    else:
+        file_path = resolve_upload(safe_id)
     ext = utils.get_ext(file_path)
     media_type = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                   "png": "image/png", "webp": "image/webp"}.get(ext, "application/octet-stream")
@@ -734,11 +740,35 @@ def studio_preview(payload: dict = Body(...)):
                     headers={"X-Studio-Info": json.dumps(info), "Cache-Control": "no-store"})
 
 
+def _ensure_orig_backup(src_path: str) -> str:
+    """Ensures an unmodified backup copy of src_path exists so scanner filters can be previewed/re-applied cleanly."""
+    import shutil
+    orig_path = os.path.join(os.path.dirname(src_path), "orig_" + os.path.basename(src_path))
+    if not os.path.isfile(orig_path):
+        shutil.copy2(src_path, orig_path)
+    return orig_path
+
+
+def _update_orig_backup(src_path: str):
+    """Updates the backup copy after a structural change (crop, rotate, cutout replacement)."""
+    import shutil
+    orig_path = os.path.join(os.path.dirname(src_path), "orig_" + os.path.basename(src_path))
+    if os.path.isfile(src_path):
+        shutil.copy2(src_path, orig_path)
+
+
 @app.post("/api/image/crop")
 async def crop_image_endpoint(payload: dict = Body(...)):
     """Crops an uploaded image by normalized box [x, y, width, height] (0..1)."""
     file_id = os.path.basename(str(payload.get("file_id", "")))
-    src = resolve_upload(file_id)
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        side = str(payload.get("side", "front"))
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        src = back if side == "back" else front
+    else:
+        src = resolve_upload(file_id)
+
     if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
         raise HTTPException(status_code=400, detail="Only images can be cropped")
 
@@ -754,32 +784,108 @@ async def crop_image_endpoint(payload: dict = Body(...)):
         crop_box = (int(x * iw), int(y * ih), int((x + w) * iw), int((y + h) * ih))
         cropped = im.crop(crop_box)
         cropped.save(src, "JPEG", quality=95)
+    _update_orig_backup(src)
 
     return {"success": True, "file_id": file_id}
+
+
+@app.get("/api/image/camscan-preview")
+def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
+    """Renders a live preview of the CamScanner effect without overwriting the saved file yet."""
+    file_id = os.path.basename(str(file_id or ""))
+    mode = clean_choice(mode, ("original", "magic_color", "bw_doc", "grayscale"), "magic_color")
+    import image_fx
+
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        orig_f = _ensure_orig_backup(front)
+        orig_b = _ensure_orig_backup(back)
+        with Image.open(orig_f) as im_f, Image.open(orig_b) as im_b:
+            im_f = ImageOps.exif_transpose(im_f).convert("RGB")
+            im_b = ImageOps.exif_transpose(im_b).convert("RGB")
+            im_f.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            im_b.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            if mode != "original":
+                im_f = image_fx.camscanner_process(im_f, mode=mode)
+                im_b = image_fx.camscanner_process(im_b, mode=mode)
+            pad = 16
+            cw = max(im_f.width, im_b.width) + pad * 2
+            ch = im_f.height + im_b.height + pad * 3
+            canvas = Image.new("RGB", (cw, ch), (241, 245, 249))
+            canvas.paste(im_f, ((cw - im_f.width) // 2, pad))
+            canvas.paste(im_b, ((cw - im_b.width) // 2, im_f.height + pad * 2))
+            buf = io.BytesIO()
+            canvas.save(buf, "JPEG", quality=85)
+            return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be scanned/enhanced")
+    orig = _ensure_orig_backup(src)
+    with Image.open(orig) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im.thumbnail((950, 950), Image.Resampling.LANCZOS)
+        if mode != "original":
+            im = image_fx.camscanner_process(im, mode=mode)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/image/camscan")
 async def camscan_image_endpoint(payload: dict = Body(...)):
-    """Applies CamScanner document flattening & clarity enhancement to an uploaded document/photo."""
+    """Applies CamScanner document flattening & clarity enhancement to an uploaded document/photo or NID card."""
+    import shutil
+    import image_fx
     file_id = os.path.basename(str(payload.get("file_id", "")))
+    mode = clean_choice(str(payload.get("mode", "magic_color")).strip(), ("original", "magic_color", "bw_doc", "grayscale"), "magic_color")
+
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        for p in (front, back):
+            orig = _ensure_orig_backup(p)
+            if mode == "original":
+                shutil.copy2(orig, p)
+            else:
+                with Image.open(orig) as im:
+                    im = ImageOps.exif_transpose(im).convert("RGB")
+                    enhanced = image_fx.camscanner_process(im, mode=mode)
+                    enhanced.save(p, "JPEG", quality=95)
+        return {"success": True, "file_id": file_id, "mode": mode}
+
     src = resolve_upload(file_id)
     if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
         raise HTTPException(status_code=400, detail="Only images can be scanned/enhanced")
 
-    mode = str(payload.get("mode", "magic_color")).strip()
-    import image_fx
-    with Image.open(src) as im:
-        im = ImageOps.exif_transpose(im).convert("RGB")
-        enhanced = image_fx.camscanner_process(im, mode=mode)
-        enhanced.save(src, "JPEG", quality=95)
+    orig = _ensure_orig_backup(src)
+    if mode == "original":
+        shutil.copy2(orig, src)
+    else:
+        with Image.open(orig) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            enhanced = image_fx.camscanner_process(im, mode=mode)
+            enhanced.save(src, "JPEG", quality=95)
 
-    return {"success": True, "file_id": file_id}
+    return {"success": True, "file_id": file_id, "mode": mode}
 
 
 @app.post("/api/file/rotate")
 async def rotate_file_endpoint(payload: dict = Body(...)):
-    """Rotates an image or PDF file by 90 degrees clockwise."""
+    """Rotates an image, NID pair, or PDF file by 90 degrees clockwise."""
     file_id = os.path.basename(str(payload.get("file_id", "")))
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        for p in (front, back):
+            with Image.open(p) as im:
+                im = ImageOps.exif_transpose(im)
+                rotated = im.rotate(-90, expand=True)
+                rotated.save(p, "JPEG", quality=95)
+            _update_orig_backup(p)
+        return {"success": True, "file_id": file_id}
+
     src = resolve_upload(file_id)
     ext = utils.get_ext(src)
 
@@ -788,6 +894,7 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
             im = ImageOps.exif_transpose(im)
             rotated = im.rotate(-90, expand=True)
             rotated.save(src, "JPEG" if ext in ("jpg", "jpeg") else "PNG", quality=95)
+        _update_orig_backup(src)
     elif ext == "pdf":
         import pypdf
         reader = pypdf.PdfReader(src)
@@ -805,53 +912,17 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
     return {"success": True, "file_id": file_id}
 
 
-
-
-def call_remove_bg_api(image_bytes: bytes, api_key: str, bg_color: Optional[str] = None) -> Optional[bytes]:
-    """Calls official remove.bg REST API (v1.0) to remove background."""
-    import urllib.request
-    boundary = "----WebKitFormBoundary" + secrets.token_hex(8)
-    body = bytearray()
-    
-    # image_file
-    body.extend(f"--{boundary}\r\n".encode())
-    body.extend(b'Content-Disposition: form-data; name="image_file"; filename="input.jpg"\r\n')
-    body.extend(b'Content-Type: image/jpeg\r\n\r\n')
-    body.extend(image_bytes)
-    body.extend(b'\r\n')
-    
-    # size = auto
-    body.extend(f"--{boundary}\r\n".encode())
-    body.extend(b'Content-Disposition: form-data; name="size"\r\n\r\nauto\r\n')
-    
-    # bg_color if specified (hex without #)
-    if bg_color and bg_color.lower() not in ("none", "transparent", ""):
-        clean_col = bg_color.lstrip("#")
-        body.extend(f"--{boundary}\r\n".encode())
-        body.extend(f'Content-Disposition: form-data; name="bg_color"\r\n\r\n{clean_col}\r\n'.encode())
-        
-    body.extend(f"--{boundary}--\r\n".encode())
-    
-    req = urllib.request.Request(
-        "https://api.remove.bg/v1.0/removebg",
-        data=body,
-        headers={
-            "X-Api-Key": api_key,
-            "Content-Type": f"multipart/form-data; boundary={boundary}"
-        },
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=40) as resp:
-        if resp.status == 200:
-            return resp.read()
-    return None
-
-
 @app.post("/api/image/save-crop")
-async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(...)):
+async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(...), side: str = Form("front")):
     """Receives pixel-perfect cropped canvas blob from client Cropper.js."""
     file_id = os.path.basename(file_id)
-    dest = resolve_upload(file_id)
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        dest = back if side == "back" else front
+    else:
+        dest = resolve_upload(file_id)
+
     if utils.get_ext(dest) not in ("jpg", "jpeg", "png", "webp"):
         raise HTTPException(status_code=400, detail="Only images can be cropped")
 
@@ -859,112 +930,43 @@ async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(.
     with Image.open(io.BytesIO(content)) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         im.save(dest, "JPEG", quality=95)
-
-    return {"success": True, "file_id": file_id}
-
-
-@app.post("/api/image/remove-bg")
-async def remove_bg_endpoint(payload: dict = Body(...)):
-    """
-    Remove.bg style background removal:
-    1. Uses official remove.bg API if shop key / env key is available
-    2. Falls back seamlessly to built-in high-accuracy background segmentation
-    3. Colors background (white, sky blue, navy, red, light gray, transparent)
-    """
-    file_id = os.path.basename(str(payload.get("file_id", "")))
-    src = resolve_upload(file_id)
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images are supported")
-
-    bg_color = str(payload.get("bg_color", "#ffffff")).strip()
-    shop_id = int(payload.get("shop_id", 0) or 0)
-    user_api_key = str(payload.get("api_key", "")).strip()
-
-    # Determine API key (payload -> shop settings -> environment)
-    api_key = user_api_key
-    if not api_key and shop_id:
-        s = db.get_shop_by_id(shop_id)
-        if s and s.get("remove_bg_api_key"):
-            api_key = s["remove_bg_api_key"].strip()
-    if not api_key:
-        api_key = os.environ.get("REMOVE_BG_API_KEY", "").strip()
-
-    with open(src, "rb") as f:
-        src_bytes = f.read()
-
-    processed_bytes = None
-    engine_used = "local"
-
-    if api_key:
-        try:
-            processed_bytes = await asyncio.to_thread(call_remove_bg_api, src_bytes, api_key, bg_color)
-            if processed_bytes:
-                engine_used = "remove.bg API"
-        except Exception as e:
-            print(f"[RemoveBG] API call failed: {e}, using local fallback")
-
-    if not processed_bytes:
-        import image_fx
-        with Image.open(io.BytesIO(src_bytes)) as im:
-            im = ImageOps.exif_transpose(im).convert("RGB")
-            tol = float(payload.get("tol", 45.0))
-            rgba, mask = image_fx.advanced_remove_background(im, tol=tol)
-            if bg_color and bg_color.lower() not in ("none", "transparent"):
-                bg = Image.new("RGBA", rgba.size, bg_color)
-                bg.paste(rgba, (0, 0), rgba)
-                final_im = bg.convert("RGB")
-            else:
-                final_im = rgba
-            buf = io.BytesIO()
-            final_im.save(buf, "PNG" if bg_color in ("none", "transparent") else "JPEG", quality=95)
-            processed_bytes = buf.getvalue()
-
-    with open(src, "wb") as f:
-        f.write(processed_bytes)
-
-    return {"success": True, "file_id": file_id, "engine": engine_used}
-
-
-@app.post("/api/image/apply-suit")
-async def apply_suit_endpoint(payload: dict = Body(...)):
-    """Overlays a formal suit/coat on a passport photo with custom scale and positioning."""
-    file_id = os.path.basename(str(payload.get("file_id", "")))
-    src = resolve_upload(file_id)
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images are supported")
-
-    suit_id = str(payload.get("suit_id", "suit1")).strip()
-    zoom = float(payload.get("zoom", 1.0))
-    ox = float(payload.get("ox", 0.0))
-    oy = float(payload.get("oy", 0.0))
-
-    import image_fx
-    with Image.open(src) as im:
-        im = ImageOps.exif_transpose(im).convert("RGB")
-        res = image_fx.apply_dress_overlay(im, suit_id, suit_zoom=zoom, suit_ox=ox, suit_oy=oy)
-        res.save(src, "JPEG", quality=95)
+    _update_orig_backup(dest)
 
     return {"success": True, "file_id": file_id}
 
 
 @app.post("/api/image/replace-cutout")
-async def replace_cutout_endpoint(file_id: str = Form(...), file: UploadFile = File(...), bg_color: str = Form("#ffffff")):
+async def replace_cutout_endpoint(
+    file_id: str = Form(...),
+    file: UploadFile = File(...),
+    bg_color: str = Form("#ffffff"),
+    side: str = Form("front")
+):
     """Directly replaces current photo with a cutout PNG downloaded from remove.bg website."""
     file_id = os.path.basename(file_id)
-    dest = resolve_upload(file_id)
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        dest = back if side == "back" else front
+    else:
+        dest = resolve_upload(file_id)
+
     if utils.get_ext(dest) not in ("jpg", "jpeg", "png", "webp"):
         raise HTTPException(status_code=400, detail="Only images are supported")
 
     content = await file.read()
     with Image.open(io.BytesIO(content)) as im:
         im = ImageOps.exif_transpose(im)
-        if im.mode == "RGBA" and bg_color and bg_color.lower() not in ("none", "transparent"):
-            bg = Image.new("RGBA", im.size, bg_color)
+        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+            im = im.convert("RGBA")
+            fill_col = bg_color if (bg_color and bg_color.startswith("#")) else "#ffffff"
+            bg = Image.new("RGBA", im.size, fill_col)
             bg.paste(im, (0, 0), im)
             im = bg.convert("RGB")
         else:
             im = im.convert("RGB")
         im.save(dest, "JPEG", quality=95)
+    _update_orig_backup(dest)
 
     return {"success": True, "file_id": file_id}
 
