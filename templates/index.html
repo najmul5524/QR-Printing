@@ -21,11 +21,13 @@
         <span class="text-2xl font-bold bg-gradient-to-r from-pink-600 to-orange-500 bg-clip-text text-transparent">QR Se Print</span>
       </div>
       <div class="flex items-center space-x-3">
+        {% if superadmin %}
+          <a href="/superadmin" class="px-3.5 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold hover:bg-black transition">🛡️ সুপার অ্যাডমিন</a>
+        {% endif %}
         {% if shop %}
           <a href="/admin" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 transition">ড্যাশবোর্ড ({{ shop.name }})</a>
         {% else %}
-          <a href="/login" class="px-4 py-2 text-gray-700 font-semibold hover:text-pink-600 transition">লগইন</a>
-          <a href="/register" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 shadow-md shadow-pink-200 transition">দোকান রেজিস্টার করুন</a>
+          <a href="/login" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 shadow-md shadow-pink-200 transition">শপ লগইন</a>
         {% endif %}
       </div>
     </div>
@@ -46,14 +48,14 @@
       </p>
 
       <div class="mt-10 flex flex-wrap justify-center gap-4">
-        <a href="/register" class="px-8 py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-lg font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition">
-          🚀 আপনার দোকানের জন্য শুরু করুন
+        <a href="/login" class="px-8 py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-lg font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition">
+          🔐 দোকানদার লগইন করুন
         </a>
         <a href="/p/demo101" class="px-8 py-3.5 bg-white border-2 border-gray-200 text-gray-700 text-lg font-bold rounded-xl hover:border-pink-500 hover:text-pink-600 transition">
           📱 লাইভ ডেমো দেখুন
         </a>
         <a href="/transfer" class="px-8 py-3.5 bg-white border-2 border-gray-200 text-gray-700 text-lg font-bold rounded-xl hover:border-pink-500 hover:text-pink-600 transition">
-          📲 QR ফাইল ট্রান্সফার (মোবাইল ↔ পিসি)
+          📲 ফাইল ট্রান্সফার (মোবাইল ↔ মোবাইল / পিসি ↔ পিসি)
         </a>
       </div>
 

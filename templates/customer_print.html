@@ -567,9 +567,43 @@
 
     </div><!-- /printFlow -->
 
-    <!-- ═════════ FILE TRANSFER ═════════ -->
+      <!-- ═════════ FILE TRANSFER ═════════ -->
     <div id="transferFlow" class="hidden space-y-4">
 
+      <!-- 1. Universal Device-to-Device File Transfer (Mobile<->Mobile, PC<->PC, Mobile<->PC) -->
+      <div class="bg-gradient-to-br from-slate-900 via-slate-800 to-pink-900 text-white p-4 rounded-2xl shadow-lg space-y-3 border border-slate-700">
+        <div class="flex items-center justify-between flex-wrap gap-1">
+          <h2 class="font-bold text-base flex items-center gap-1.5">
+            <span>📲</span> <span>মোবাইল ↔ মোবাইল ও পিসি ↔ পিসি ফাইল ট্রান্সফার</span>
+          </h2>
+          <span class="text-[10px] bg-pink-600 text-white px-2 py-0.5 rounded-full font-bold">সব ডিভাইস সাপোর্টেড</span>
+        </div>
+        <p class="text-xs text-slate-300">
+          মোবাইল থেকে মোবাইলে, পিসি থেকে পিসিতে অথবা মোবাইল থেকে পিসিতে যেকোনো ফাইল (ছবি, ভিডিও, PDF, ZIP...) সরাসরি আদান-প্রদান করুন।
+        </p>
+
+        <form method="post" action="/transfer/new">
+          <button type="submit" class="w-full py-3 bg-gradient-to-r from-pink-600 to-orange-500 hover:opacity-95 text-white font-bold rounded-xl shadow-md text-sm transition flex items-center justify-center gap-2">
+            <span>➕</span> <span>নতুন ট্রান্সফার রুম খুলুন (QR ও কোড পাবেন)</span>
+          </button>
+        </form>
+
+        <div class="pt-1 border-t border-slate-700/80 space-y-1.5">
+          <label class="block text-[11px] text-slate-300 font-semibold">অন্য মোবাইল বা পিসিতে খোলা রুমের ৮ অক্ষরের কোড থাকলে এখানে দিন:</label>
+          <div class="flex gap-2">
+            <input type="text" id="roomJoinCodeDirect" maxlength="12" placeholder="রুম কোড (যেমন: K7M9P2X4)" class="flex-1 px-3 py-2 rounded-xl bg-slate-800 border border-slate-600 text-white text-sm font-mono uppercase tracking-wider outline-none focus:border-pink-500">
+            <button type="button" id="btnRoomJoinDirect" class="px-4 py-2 bg-white hover:bg-pink-50 text-slate-900 rounded-xl text-xs font-extrabold shrink-0 transition">
+              যোগ দিন ➔
+            </button>
+          </div>
+        </div>
+
+        <a href="/transfer" class="block text-center text-xs text-pink-300 hover:text-white underline font-semibold pt-1">
+          📷 ক্যামেরা দিয়ে অন্য ফোনের QR স্ক্যান করতে এখানে ট্যাপ করুন
+        </a>
+      </div>
+
+      <!-- 2. Send File to Shop Counter -->
       <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
         <div>
           <h2 class="font-bold text-gray-800 text-base">📤 দোকানে ফাইল পাঠান</h2>
@@ -610,11 +644,6 @@
           <button type="button" id="btnTrGet" class="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-bold">ফাইল দেখুন</button>
         </div>
       </div>
-
-      <a href="/transfer" class="block bg-gradient-to-r from-gray-900 to-gray-700 text-white p-4 rounded-2xl shadow text-center">
-        <p class="font-bold text-sm">📲 মোবাইল ↔ পিসি ফাইল ট্রান্সফার (QR দিয়ে)</p>
-        <p class="text-xs text-gray-300 mt-0.5">দোকান ছাড়াই নিজের ডিভাইসগুলোর মধ্যে যেকোনো ফাইল পাঠান</p>
-      </a>
     </div><!-- /transferFlow -->
 
     <!-- Print Preview Modal Dialog -->
@@ -921,6 +950,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102405"></script>
+  <script src="/static/customer_print.js?v=2026102406"></script>
 </body>
 </html>

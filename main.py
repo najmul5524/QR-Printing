@@ -245,20 +245,38 @@ def get_current_shop(request: Request) -> Optional[dict]:
     shop_id_cookie = unsign_value(request.cookies.get("shop_session"))
     if shop_id_cookie and shop_id_cookie.isdigit():
         shop = db.get_shop_by_id(int(shop_id_cookie))
-        if shop:
+        if shop and shop.get("is_active", 1) == 1:
             return dict(shop)
     return None
+
+
+def set_superadmin_session(response: Response, request: Request):
+    response.set_cookie(
+        key="superadmin_session", value=sign_value("superadmin"), max_age=86400 * 30,
+        httponly=True, samesite="lax", secure=base_url(request).startswith("https")
+    )
+
+
+def is_superadmin(request: Request) -> bool:
+    return unsign_value(request.cookies.get("superadmin_session")) == "superadmin"
+
 
 # ── LANDING & AUTH ROUTES ──
 
 @app.get("/", response_class=HTMLResponse)
 async def home_page(request: Request):
     shop = get_current_shop(request)
-    return templates.TemplateResponse(request=request, name="index.html", context={"shop": shop})
+    return templates.TemplateResponse(request=request, name="index.html", context={
+        "shop": shop,
+        "superadmin": is_superadmin(request)
+    })
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
-    return templates.TemplateResponse(request=request, name="admin_login.html", context={"mode": "register"})
+    # Public self-registration is disabled; only Super Admin can create shops
+    if is_superadmin(request):
+        return RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/register")
 async def register_shop(
@@ -269,40 +287,9 @@ async def register_shop(
     password: str = Form(...),
     shop_code: str = Form(...)
 ):
-    clean_code = shop_code.strip().lower()
-    if db.get_shop_by_code(clean_code):
-        return templates.TemplateResponse(request=request, name="admin_login.html", context={
-            "mode": "register", 
-            "error": "এই শপ কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে। অন্য কোড দিন।"
-        })
-    
-    conn = db.get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM shops WHERE phone = ?", (phone.strip(),))
-    if cursor.fetchone():
-        conn.close()
-        return templates.TemplateResponse(request=request, name="admin_login.html", context={
-            "mode": "register", 
-            "error": "এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত রয়েছে।"
-        })
-    
-    api_key = "qsp_" + secrets.token_hex(16)
-    now = datetime.now().isoformat()
-    cursor.execute("""
-    INSERT INTO shops (
-        shop_code, name, owner_name, phone, password, api_key, 
-        bkash_number, nagad_number, allow_counter_cash,
-        rate_bw_single, rate_bw_double, rate_color_single, rate_color_double, rate_photo_4x6,
-        created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 3.0, 5.0, 10.0, 18.0, 30.0, ?)
-    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), password, api_key, phone.strip(), phone.strip(), now))
-    conn.commit()
-    shop_id = cursor.lastrowid
-    conn.close()
-    
-    response = RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
-    set_session(response, request, shop_id)
-    return response
+    if not is_superadmin(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    return await superadmin_create_shop(request, shop_name, owner_name, phone, password, shop_code)
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -314,11 +301,21 @@ async def login_shop(
     phone: str = Form(...),
     password: str = Form(...)
 ):
-    shop = db.authenticate_shop(phone.strip(), password)
+    clean_phone = phone.strip()
+    clean_pass = password.strip()
+
+    # 1. Check if Super Admin credentials were entered
+    if db.authenticate_superadmin(clean_phone, clean_pass):
+        response = RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
+        set_superadmin_session(response, request)
+        return response
+
+    # 2. Check regular shopkeeper login
+    shop = db.authenticate_shop(clean_phone, clean_pass)
     if not shop:
         return templates.TemplateResponse(request=request, name="admin_login.html", context={
             "mode": "login", 
-            "error": "মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে।"
+            "error": "মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে (অথবা দোকানটি সাময়িকভাবে বন্ধ রয়েছে)।"
         })
     
     response = RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -330,6 +327,158 @@ async def logout():
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(key="shop_session")
     return response
+
+
+# ── SUPER ADMIN (MASTER OWNER CONTROL PANEL) ──
+
+@app.get("/superadmin", response_class=HTMLResponse)
+async def superadmin_dashboard(request: Request, msg: str = "", err: str = "", created: str = ""):
+    if not is_superadmin(request):
+        return templates.TemplateResponse(request=request, name="superadmin.html", context={
+            "authenticated": False,
+            "error": err
+        })
+    shops = db.get_all_shops_with_stats()
+    sa_creds = db.get_superadmin_credentials()
+    created_shop = db.get_shop_by_code(created.strip().lower()) if created else None
+    return templates.TemplateResponse(request=request, name="superadmin.html", context={
+        "authenticated": True,
+        "shops": shops,
+        "sa_creds": sa_creds,
+        "base_url": base_url(request),
+        "msg": msg,
+        "error": err,
+        "created_shop": created_shop,
+    })
+
+
+@app.post("/superadmin/login")
+async def superadmin_login(request: Request, phone: str = Form(...), password: str = Form(...)):
+    if db.authenticate_superadmin(phone.strip(), password.strip()):
+        response = RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
+        set_superadmin_session(response, request)
+        return response
+    return templates.TemplateResponse(request=request, name="superadmin.html", context={
+        "authenticated": False,
+        "error": "সুপার অ্যাডমিন মোবাইল নম্বর বা পাসওয়ার্ড ভুল হয়েছে।"
+    })
+
+
+@app.get("/superadmin/logout")
+async def superadmin_logout():
+    response = RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key="superadmin_session")
+    return response
+
+
+@app.post("/superadmin/shop/create")
+async def superadmin_create_shop(
+    request: Request,
+    shop_name: str = Form(...),
+    owner_name: str = Form(...),
+    phone: str = Form(...),
+    password: str = Form(...),
+    shop_code: str = Form(...)
+):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    clean_code = re.sub(r"[^a-zA-Z0-9_-]", "", shop_code.strip().lower())
+    if not clean_code:
+        return RedirectResponse(url="/superadmin?err=সঠিক+শপ+কোড+দিন", status_code=status.HTTP_303_SEE_OTHER)
+
+    conn = db.get_db()
+    cursor = conn.cursor()
+    if cursor.execute("SELECT id FROM shops WHERE LOWER(shop_code) = ?", (clean_code,)).fetchone():
+        conn.close()
+        return RedirectResponse(url="/superadmin?err=এই+শপ+কোডটি+ইতিমধ্যে+ব্যবহৃত+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+    if cursor.execute("SELECT id FROM shops WHERE phone = ?", (phone.strip(),)).fetchone():
+        conn.close()
+        return RedirectResponse(url="/superadmin?err=এই+মোবাইল+নম্বরটি+ইতিমধ্যে+নিবন্ধিত+রয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+    api_key = "qsp_" + secrets.token_hex(16)
+    now = datetime.now().isoformat()
+    cursor.execute("""
+    INSERT INTO shops (
+        shop_code, name, owner_name, phone, password, api_key, 
+        bkash_number, nagad_number, allow_counter_cash,
+        rate_bw_single, rate_bw_double, rate_color_single, rate_color_double, rate_photo_4x6,
+        is_active, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 3.0, 5.0, 10.0, 18.0, 30.0, 1, ?)
+    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), password.strip(), api_key, phone.strip(), phone.strip(), now))
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(url=f"/superadmin?created={clean_code}&msg=নতুন+দোকান+সফলভাবে+তৈরি+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/superadmin/shop/{shop_id}/update")
+async def superadmin_update_shop(
+    shop_id: int,
+    request: Request,
+    shop_name: str = Form(...),
+    owner_name: str = Form(""),
+    shop_code: str = Form(...),
+    phone: str = Form(...),
+    password: str = Form(...),
+    is_active: Optional[int] = Form(1)
+):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    clean_code = re.sub(r"[^a-zA-Z0-9_-]", "", shop_code.strip().lower())
+    if not clean_code:
+        return RedirectResponse(url="/superadmin?err=শপ+কোড+সঠিক+নয়", status_code=status.HTTP_303_SEE_OTHER)
+
+    conn = db.get_db()
+    dup_code = conn.execute("SELECT id FROM shops WHERE LOWER(shop_code) = ? AND id != ?", (clean_code, shop_id)).fetchone()
+    dup_phone = conn.execute("SELECT id FROM shops WHERE phone = ? AND id != ?", (phone.strip(), shop_id)).fetchone()
+    conn.close()
+    if dup_code:
+        return RedirectResponse(url="/superadmin?err=এই+শপ+কোডটি+অন্য+দোকানে+ব্যবহৃত+হচ্ছে", status_code=status.HTTP_303_SEE_OTHER)
+    if dup_phone:
+        return RedirectResponse(url="/superadmin?err=এই+মোবাইল+নম্বরটি+অন্য+দোকানে+ব্যবহৃত+হচ্ছে", status_code=status.HTTP_303_SEE_OTHER)
+
+    db.update_shop_by_superadmin(shop_id, clean_code, shop_name, owner_name, phone, password, 1 if is_active else 0)
+    return RedirectResponse(url="/superadmin?msg=দোকানের+তথ্য+ও+পাসওয়ার্ড+আপডেট+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/superadmin/shop/{shop_id}/toggle")
+async def superadmin_toggle_shop(shop_id: int, request: Request, is_active: int = Form(...)):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    db.toggle_shop_active(shop_id, is_active)
+    return RedirectResponse(url="/superadmin?msg=দোকানের+স্ট্যাটাস+পরিবর্তন+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/superadmin/shop/{shop_id}/delete")
+async def superadmin_delete_shop(shop_id: int, request: Request):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    db.delete_shop_by_superadmin(shop_id)
+    return RedirectResponse(url="/superadmin?msg=দোকানটি+মুছে+ফেলা+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/superadmin/shop/{shop_id}/impersonate")
+async def superadmin_impersonate_shop(shop_id: int, request: Request):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    shop = db.get_shop_by_id(shop_id)
+    if not shop:
+        return RedirectResponse(url="/superadmin?err=দোকান+পাওয়া+যায়নি", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    set_session(response, request, shop["id"])
+    return response
+
+
+@app.post("/superadmin/credentials")
+async def superadmin_update_creds(request: Request, phone: str = Form(...), password: str = Form(...)):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if len(phone.strip()) < 5 or len(password.strip()) < 4:
+        return RedirectResponse(url="/superadmin?err=সঠিক+নম্বর+ও+কমপক্ষে+৪+অক্ষরের+পাসওয়ার্ড+দিন", status_code=status.HTTP_303_SEE_OTHER)
+    db.update_superadmin_credentials(phone.strip(), password.strip())
+    return RedirectResponse(url="/superadmin?msg=সুপার+অ্যাডমিন+মোবাইল+নম্বর+ও+পাসওয়ার্ড+আপডেট+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
 
 # ── ADMIN DASHBOARD ──
 
@@ -1974,7 +2123,11 @@ async def room_delete_file(room_id: str, file_id: str):
 async def room_zip(room_id: str):
     import zipfile
     room = _room_or_404(room_id)
-    files = [f for f in db.list_room_files(room["id"]) if os.path.isfile(f["stored_path"])]
+    all_files = db.list_room_files(room["id"])
+    files = []
+    for f in all_files:
+        if os.path.isfile(f["stored_path"]) or await asyncio.to_thread(storage.ensure_local_from_r2, f["stored_path"]):
+            files.append(f)
     if not files:
         raise HTTPException(status_code=404, detail="No files")
     tmp = os.path.join(ROOM_DIR, f"zip_{secrets.token_hex(6)}.tmp")
@@ -2015,8 +2168,8 @@ async def websocket_room(websocket: WebSocket, room_id: str):
             raw = await websocket.receive_text()
             try:
                 msg = json.loads(raw)
-                # WebRTC Signaling relay (P2P direct file transfer between phone and PC)
-                if msg.get("type") in ("webrtc_offer", "webrtc_answer", "webrtc_candidate", "webrtc_join"):
+                # WebRTC Signaling relay (P2P direct file transfer between Mobile<->Mobile, PC<->PC, Mobile<->PC)
+                if str(msg.get("type", "")).startswith("webrtc_"):
                     for ws in list(manager.room_connections.get(rid, [])):
                         if ws != websocket:
                             try:

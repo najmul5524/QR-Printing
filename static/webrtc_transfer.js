@@ -1,17 +1,23 @@
-// WebRTC Direct Peer-to-Peer file transfer engine for transfer_room
+// Universal WebRTC Direct Peer-to-Peer file transfer engine
+// Supports: Mobile <-> Mobile, PC <-> PC, and Mobile <-> PC
 (function() {
   const CHUNK_SIZE = 64 * 1024; // 64 KB
   const ICE_SERVERS = [
+    { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' }
   ];
 
+  const myPeerId = Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36).slice(-4);
+  let myDevice = 'ডিভাইস';
+  let remoteDevice = 'অন্য ডিভাইস';
   let pc = null;
   let dc = null;
   let ws = null;
-  let isInitiator = false;
   let peerReady = false;
+  let makingOffer = false;
+  let pendingCandidates = [];
 
   // Receiving state
   let incomingInfo = null;
@@ -22,65 +28,56 @@
     return peerReady && dc && dc.readyState === 'open';
   };
 
-  window.initWebRTC = function(websocketInstance, isHost) {
+  window.initWebRTC = function(websocketInstance, deviceLabel) {
     ws = websocketInstance;
-    isInitiator = !!isHost;
-    createPeerConnection();
-
-    setTimeout(() => {
-      sendSignal({ type: 'webrtc_join', initiator: isInitiator });
-      if (isInitiator) {
-        initiateOffer();
-      }
-    }, 500);
-  };
-
-  window.handleWebRTCSignal = async function(msg) {
-    if (!pc) createPeerConnection();
-    try {
-      if (msg.type === 'webrtc_join') {
-        if (isInitiator && !peerReady) {
-          initiateOffer();
-        }
-      } else if (msg.type === 'webrtc_offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendSignal({ type: 'webrtc_answer', sdp: answer });
-      } else if (msg.type === 'webrtc_answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-      } else if (msg.type === 'webrtc_candidate') {
-        if (msg.candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-        }
-      }
-    } catch (err) {
-      console.log('[WebRTC Error]', err);
+    if (deviceLabel && typeof deviceLabel === 'string') {
+      myDevice = deviceLabel;
     }
+    setTimeout(() => {
+      sendSignal({ type: 'webrtc_join', peerId: myPeerId, device: myDevice });
+    }, 250);
   };
 
-  function sendSignal(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify(obj)); } catch (e) {}
+  function cleanupPeerConnection() {
+    peerReady = false;
+    pendingCandidates = [];
+    if (dc) {
+      try { dc.close(); } catch (e) {}
+      dc = null;
+    }
+    if (pc) {
+      try { pc.close(); } catch (e) {}
+      pc = null;
     }
   }
 
-  function createPeerConnection() {
-    if (pc) return;
+  function createPeerConnection(asInitiator) {
+    cleanupPeerConnection();
     try {
       pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          sendSignal({ type: 'webrtc_candidate', candidate: e.candidate });
+          sendSignal({
+            type: 'webrtc_candidate',
+            peerId: myPeerId,
+            candidate: e.candidate
+          });
         }
       };
 
       pc.onconnectionstatechange = () => {
-        updateP2PStatus(pc.connectionState);
+        if (!pc) return;
+        if (pc.connectionState === 'connected') {
+          updateP2PStatus('connected');
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          peerReady = false;
+          updateP2PStatus('disconnected');
+        }
       };
 
-      if (isInitiator) {
-        dc = pc.createDataChannel('fileTransfer');
+      if (asInitiator) {
+        dc = pc.createDataChannel('fileTransfer', { ordered: true });
         setupDataChannel(dc);
       } else {
         pc.ondatachannel = (e) => {
@@ -93,14 +90,84 @@
     }
   }
 
+  async function flushPendingCandidates() {
+    if (!pc || !pc.remoteDescription) return;
+    while (pendingCandidates.length > 0) {
+      const c = pendingCandidates.shift();
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch (e) {}
+    }
+  }
+
   async function initiateOffer() {
-    if (!pc) return;
     try {
+      makingOffer = true;
+      createPeerConnection(true);
+      if (!pc) return;
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      sendSignal({ type: 'webrtc_offer', sdp: offer });
+      sendSignal({
+        type: 'webrtc_offer',
+        peerId: myPeerId,
+        device: myDevice,
+        sdp: pc.localDescription
+      });
     } catch (e) {
       console.log('Offer creation error:', e);
+    } finally {
+      makingOffer = false;
+    }
+  }
+
+  window.handleWebRTCSignal = async function(msg) {
+    if (!msg || msg.peerId === myPeerId) return;
+    if (msg.device) remoteDevice = msg.device;
+
+    try {
+      if (msg.type === 'webrtc_join') {
+        // Another device (Mobile or PC) just joined the room -> we initiate the WebRTC offer immediately!
+        await initiateOffer();
+      } else if (msg.type === 'webrtc_offer') {
+        const polite = myPeerId < (msg.peerId || '');
+        const offerCollision = makingOffer || (pc && pc.signalingState !== 'stable');
+        if (offerCollision && !polite) {
+          return; // impolite peer ignores colliding offer
+        }
+        createPeerConnection(false);
+        if (!pc) return;
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        await flushPendingCandidates();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal({
+          type: 'webrtc_answer',
+          peerId: myPeerId,
+          device: myDevice,
+          sdp: pc.localDescription
+        });
+      } else if (msg.type === 'webrtc_answer') {
+        if (!pc) return;
+        if (pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          await flushPendingCandidates();
+        }
+      } else if (msg.type === 'webrtc_candidate') {
+        if (!msg.candidate) return;
+        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } else {
+          pendingCandidates.push(msg.candidate);
+        }
+      }
+    } catch (err) {
+      console.log('[WebRTC Signal Error]', err);
+    }
+  };
+
+  function sendSignal(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(obj)); } catch (e) {}
     }
   }
 
@@ -124,11 +191,11 @@
     if (!badge) return;
     if (state === 'connected') {
       badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-green-100 text-green-800 flex items-center gap-1 cursor-pointer';
-      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ P2P ডিরেক্ট সক্রিয় (আনলিমিটেড ফ্রি)';
+      badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ ডিরেক্ট সংযুক্ত (${esc(myDevice)} ⇄ ${esc(remoteDevice)})`;
       badge.onclick = null;
     } else {
       badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 flex items-center gap-1 cursor-pointer hover:bg-amber-200';
-      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> ☁️ ক্লাউড মোড (৫০ MB পর্যন্ত) • ❓ সাহায্য';
+      badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> ☁️ ক্লাউড ও P2P রেডি (৫০ MB+) • ❓ সাহায্য';
       badge.onclick = () => window.showP2PHelpModal();
     }
   }
@@ -144,20 +211,20 @@
       <div class="bg-white max-w-md w-full rounded-2xl p-5 shadow-2xl border space-y-3.5 text-xs">
         <div class="flex items-center justify-between border-b pb-2.5">
           <h3 class="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-            <span>⚡</span> <span>P2P ডিরেক্ট সংযোগ সক্রিয় করার নিয়ম</span>
+            <span>⚡</span> <span>মোবাইল ↔ মোবাইল ও পিসি ↔ পিসি ফাইল ট্রান্সফার গাইড</span>
           </h3>
           <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
         </div>
         <p class="text-gray-600">
-          P2P সক্রিয় থাকলে আপনি <b>যেকোনো বড় ফাইল (১০০ MB, ৫০০ MB বা ১ GB+) সম্পূর্ণ ফ্রি ও চোখের পলকে</b> পাঠাতে পারবেন। এটি ব্লক থাকলে সর্বোচ্চ ৫০ MB ফাইল ক্লাউডের মাধ্যমে পাঠানো যাবে।
+          এই পেজ থেকে আপনি <b>মোবাইল থেকে মোবাইলে, পিসি থেকে পিসিতে বা মোবাইল থেকে পিসিতে</b> যেকোনো ফাইল পাঠাতে পারবেন।
         </p>
         <div class="space-y-2 bg-gray-50 p-3 rounded-xl border">
-          <p class="font-bold text-gray-800">P2P ব্লক ছাড়ানোর উপায়:</p>
+          <p class="font-bold text-gray-800">কিভাবে সংযুক্ত করবেন:</p>
           <ul class="list-disc list-inside space-y-1.5 text-gray-700">
-            <li><b>দোকানের ওয়াইফাই বা মোবাইল হটস্পট:</b> মোবাইল ও পিসি একই ওয়াইফাই বা হটস্পটে রাখলে সাথে সাথে P2P কানেক্ট হয়ে যাবে।</li>
-            <li><b>VPN বা AdBlocker বন্ধ করুন:</b> ফোনে যদি কোনো VPN চালু থাকে তা সাময়িক বন্ধ করুন।</li>
-            <li><b>ব্রাউজার পারমিশন:</b> Chrome/Safari/Brave ব্রাউজারের কোনো 'Shield' বা 'Data Saver' থাকলে অফ করুন।</li>
-            <li><b>পেজ রিফ্রেশ দিন:</b> উভয় ডিভাইসেই পেজটি একবার রিফ্রেশ করুন।</li>
+            <li><b>১ম ডিভাইসে (মোবাইল বা পিসি):</b> রুমের QR কোড বা ৮ অক্ষরের কোডটি খোলা রাখুন।</li>
+            <li><b>২য় ডিভাইসে (অন্য মোবাইল বা পিসি):</b> ক্যামেরা দিয়ে QR স্ক্যান করুন অথবা <b>/transfer</b> পেজে গিয়ে ৮ অক্ষরের কোডটি লিখে "যোগ দিন" চাপুন।</li>
+            <li><b>একই ওয়াইফাই বা হটস্পটে থাকলে:</b> ডিরেক্ট P2P চালু হয়ে যাবে এবং ১০০ MB / ৫০০ MB+ ফাইলও চোখের পলকে চলে যাবে।</li>
+            <li><b>ভিন্ন নেটওয়ার্কে/মোবাইল ডাটায় থাকলে:</b> ৫০ MB পর্যন্ত যেকোনো ফাইল স্বয়ংক্রিয়ভাবে ক্লাউডের মাধ্যমে সাথে সাথে অপর ডিভাইসে চলে যাবে।</li>
           </ul>
         </div>
         <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="w-full py-2.5 bg-gray-900 text-white font-bold rounded-xl text-center">
@@ -171,12 +238,12 @@
   window.sendP2PFile = function(file, onProgress) {
     if (!dc || dc.readyState !== 'open') return false;
 
-    // Send metadata header
     dc.send(JSON.stringify({
       meta: true,
       name: file.name,
       size: file.size,
-      type: file.type
+      type: file.type,
+      sender: myDevice
     }));
 
     const reader = new FileReader();
@@ -188,7 +255,7 @@
     }
 
     reader.onload = (e) => {
-      // Flow control for WebRTC buffer
+      if (!dc || dc.readyState !== 'open') return;
       if (dc.bufferedAmount > 4 * 1024 * 1024) {
         setTimeout(() => reader.onload(e), 40);
         return;
@@ -228,7 +295,7 @@
         if (receivedBytes >= incomingInfo.size) {
           const blob = new Blob(receivedBuffers, { type: incomingInfo.type || 'application/octet-stream' });
           triggerBlobDownload(blob, incomingInfo.name);
-          addP2PFileToList(incomingInfo.name, incomingInfo.size, blob);
+          addP2PFileToList(incomingInfo.name, incomingInfo.size, blob, incomingInfo.sender);
           incomingInfo = null;
           receivedBuffers = [];
         }
@@ -249,7 +316,7 @@
     p.classList.remove('hidden');
     p.innerHTML = `
       <div class="flex justify-between font-bold text-gray-800">
-        <span>⚡ ডিরেক্ট আসছে: ${esc(name)}</span>
+        <span>⚡ ডিরেক্ট ফাইল আসছে: ${esc(name)}</span>
         <span>${fmtSize(loaded)} / ${fmtSize(size)} (${pct}%)</span>
       </div>
       <div class="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
@@ -270,18 +337,22 @@
     setTimeout(() => a.remove(), 1000);
   }
 
-  function addP2PFileToList(name, size, blob) {
+  function addP2PFileToList(name, size, blob, sender) {
     const list = document.getElementById('fileList');
     if (!list) return;
+    // Remove placeholder if present
+    const emptyMsg = list.querySelector('p.text-center');
+    if (emptyMsg) emptyMsg.remove();
+
     const url = URL.createObjectURL(blob);
     const item = document.createElement('div');
-    item.className = 'border-2 border-green-300 bg-green-50/50 rounded-xl p-3 flex items-center justify-between gap-2 animate-pulse';
+    item.className = 'border-2 border-green-300 bg-green-50/50 rounded-xl p-3 flex items-center justify-between gap-2';
     item.innerHTML = `
       <div class="min-w-0">
         <p class="font-bold text-sm text-gray-900 truncate">⚡ ${esc(name)}</p>
-        <p class="text-[11px] text-green-700">ডিরেক্ট ডিভাইস-টু-ডিভাইস (WebRTC) • ${fmtSize(size)}</p>
+        <p class="text-[11px] text-green-700">ডিরেক্ট ডিভাইস-টু-ডিভাইস (${esc(sender || 'অন্য ডিভাইস')} থেকে) • ${fmtSize(size)}</p>
       </div>
-      <a href="${url}" download="${esc(name)}" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold">⬇️ ডাউনলোড</a>
+      <a href="${url}" download="${esc(name)}" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold shrink-0">⬇️ সেভ করুন</a>
     `;
     list.prepend(item);
   }

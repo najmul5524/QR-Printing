@@ -1322,6 +1322,18 @@
   $('btnTrGet').addEventListener('click', goToTransfer);
   $('trCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') goToTransfer(); });
 
+  function joinDeviceRoomDirect() {
+    const inp = $('roomJoinCodeDirect');
+    if (!inp) return;
+    const raw = inp.value.trim();
+    const match = raw.match(/\/r\/([A-Za-z0-9]{4,12})/i);
+    const code = (match ? match[1] : raw).toUpperCase();
+    if (code.length < 4) { alert('অন্য ডিভাইসের রুম কোডটি লিখুন।'); return; }
+    location.href = '/r/' + encodeURIComponent(code);
+  }
+  if ($('btnRoomJoinDirect')) $('btnRoomJoinDirect').addEventListener('click', joinDeviceRoomDirect);
+  if ($('roomJoinCodeDirect')) $('roomJoinCodeDirect').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinDeviceRoomDirect(); });
+
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
 

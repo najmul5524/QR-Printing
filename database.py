@@ -136,6 +136,18 @@ def init_db():
     );
     """)
 
+    # 6. System Settings Table (Super Admin credentials & global controls)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """)
+    default_sa_phone = os.environ.get("SUPERADMIN_PHONE", "01900000000").strip()
+    default_sa_pass = os.environ.get("SUPERADMIN_PASSWORD", "admin123456").strip()
+    cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_phone', ?)", (default_sa_phone,))
+    cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (default_sa_pass,))
+
     conn.commit()
     
     # Seed a demo shop if no shops exist
@@ -618,5 +630,80 @@ def sync_agent_printers(shop_id: int, printer_names: List[str]):
                 "INSERT INTO printers (shop_id, printer_name, printer_type, is_online, last_seen) VALUES (?, ?, 'all', 1, ?)",
                 (shop_id, name, now)
             )
+    conn.commit()
+    conn.close()
+
+
+# ── SUPER ADMIN & SHOP CONTROL HELPERS ──
+
+def get_superadmin_credentials() -> Dict[str, str]:
+    conn = get_db()
+    rows = conn.execute("SELECT key, value FROM system_settings WHERE key IN ('superadmin_phone', 'superadmin_password')").fetchall()
+    conn.close()
+    data = {r["key"]: r["value"] for r in rows}
+    return {
+        "phone": data.get("superadmin_phone") or os.environ.get("SUPERADMIN_PHONE", "01900000000").strip(),
+        "password": data.get("superadmin_password") or os.environ.get("SUPERADMIN_PASSWORD", "admin123456").strip(),
+    }
+
+
+def update_superadmin_credentials(phone: str, password: str):
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('superadmin_phone', ?)", (phone.strip(),))
+    conn.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (password.strip(),))
+    conn.commit()
+    conn.close()
+
+
+def authenticate_superadmin(phone: str, password: str) -> bool:
+    creds = get_superadmin_credentials()
+    env_phone = os.environ.get("SUPERADMIN_PHONE", "").strip()
+    env_pass = os.environ.get("SUPERADMIN_PASSWORD", "").strip()
+    p = (phone or "").strip()
+    pw = (password or "").strip()
+    if p == creds["phone"] and pw == creds["password"]:
+        return True
+    if env_phone and env_pass and p == env_phone and pw == env_pass:
+        return True
+    return False
+
+
+def get_all_shops_with_stats() -> List[Dict[str, Any]]:
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT s.*,
+               (SELECT COUNT(*) FROM orders o WHERE o.shop_id = s.id) AS total_orders,
+               (SELECT COALESCE(SUM(o.total_price), 0) FROM orders o WHERE o.shop_id = s.id AND o.status IN ('paid', 'printing', 'completed')) AS total_revenue
+        FROM shops s
+        ORDER BY s.id DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_shop_by_superadmin(shop_id: int, shop_code: str, name: str, owner_name: str, phone: str, password: str, is_active: int = 1):
+    conn = get_db()
+    conn.execute("""
+        UPDATE shops
+        SET shop_code = ?, name = ?, owner_name = ?, phone = ?, password = ?, is_active = ?
+        WHERE id = ?
+    """, (shop_code.strip().lower(), name.strip(), owner_name.strip(), phone.strip(), password.strip(), 1 if is_active else 0, shop_id))
+    conn.commit()
+    conn.close()
+
+
+def toggle_shop_active(shop_id: int, is_active: int):
+    conn = get_db()
+    conn.execute("UPDATE shops SET is_active = ? WHERE id = ?", (1 if is_active else 0, shop_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_shop_by_superadmin(shop_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM printers WHERE shop_id = ?", (shop_id,))
+    conn.execute("DELETE FROM transfers WHERE shop_id = ?", (shop_id,))
+    conn.execute("DELETE FROM orders WHERE shop_id = ?", (shop_id,))
+    conn.execute("DELETE FROM shops WHERE id = ?", (shop_id,))
     conn.commit()
     conn.close()
