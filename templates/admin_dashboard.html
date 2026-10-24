@@ -449,7 +449,7 @@
             ⏳ প্রিন্ট সম্পন্ন হওয়ার পর ফাইল কতদিন সংরক্ষিত থাকবে? (পুনরায় প্রিন্টের জন্য)
           </label>
           <div class="flex items-center gap-2">
-            <input type="number" id="inputRetentionDays" step="0.5" min="0.1" max="30" name="file_retention_days" value="{{ shop.file_retention_days | default(1, true) }}" class="w-28 px-3 py-1.5 border border-emerald-300 rounded-lg font-bold text-sm bg-white text-gray-900">
+            <input type="number" id="inputRetentionDays" step="any" min="0.1" max="30" name="file_retention_days" value="{{ shop.file_retention_days | default(1, true) }}" class="w-28 px-3 py-1.5 border border-emerald-300 rounded-lg font-bold text-sm bg-white text-gray-900">
             <span class="font-bold text-gray-700 text-xs">দিন (Days)</span>
             <div class="flex flex-wrap gap-1 ml-auto">
               <button type="button" onclick="document.getElementById('inputRetentionDays').value='0.5'" class="px-2 py-1 bg-white hover:bg-emerald-100 border border-emerald-200 rounded text-[11px] font-bold text-emerald-800">১২ ঘণ্টা</button>
