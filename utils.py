@@ -188,14 +188,11 @@ def build_nid_sheet(
     orientation: str = "portrait",
 ) -> Image.Image:
     """
-    A4 page (300 DPI) in Portrait or Landscape with the FRONT and BACK placed at the
-    exact Smart-NID / ID-1 size of 85.60 mm x 53.98 mm, with cut guides and a 50 mm
-    scale ruler so the shopkeeper can verify the print is at 100 %.
+    Clean A4 page (300 DPI) in Portrait or Landscape with ONLY the FRONT and BACK
+    placed at the exact Smart-NID / ID-1 size of 85.60 mm x 53.98 mm (no extra text or rulers).
     """
     front = _prepare_card(front_path, rot_front, fit_mode, color_mode)
     back = _prepare_card(back_path, rot_back, fit_mode, color_mode)
-    f_title, f_label, f_small = _font(40), _font(32), _font(26)
-    margin = 24
 
     if orientation == "landscape":
         sheet = Image.new("RGB", (A4_H, A4_W), "white")
@@ -204,60 +201,30 @@ def build_nid_sheet(
         total_w = NID_W * 2 + gap
         x_front = (A4_H - total_w) // 2
         x_back = x_front + NID_W + gap
-        y_card = 420
+        y_card = 320
 
         sheet.paste(front, (x_front, y_card))
         sheet.paste(back, (x_back, y_card))
 
         for cx in (x_front, x_back):
-            draw.rectangle([cx, y_card, cx + NID_W - 1, y_card + NID_H - 1], outline="#6b7280", width=1)
-            _dashed_rect(draw, cx - margin, y_card - margin, cx + NID_W + margin, y_card + NID_H + margin)
-
-        draw.text((x_front, 160), f"ID / NID CARD (LANDSCAPE A4) - ACTUAL SIZE {NID_W_MM:.1f} x {NID_H_MM:.1f} mm", fill="#111827", font=f_title)
-        draw.text((x_front, 225), "Print at 100% (Actual size / No scaling). Cut along the dashed lines.", fill="#4b5563", font=f_small)
-        draw.text((x_front, y_card - 70), "FRONT", fill="#374151", font=f_label)
-        draw.text((x_back, y_card - 70), "BACK", fill="#374151", font=f_label)
-
-        ruler_y = y_card + NID_H + 260
-        ruler_len = mm_to_px(50)
-        draw.line([(x_front, ruler_y), (x_front + ruler_len, ruler_y)], fill="#111827", width=3)
-        for mm in range(0, 51, 10):
-            tx = x_front + mm_to_px(mm)
-            draw.line([(tx, ruler_y - 14), (tx, ruler_y + 14)], fill="#111827", width=3)
-        draw.text((x_front, ruler_y + 30), "Scale check: this line must measure exactly 50 mm.", fill="#4b5563", font=f_small)
+            draw.rectangle([cx, y_card, cx + NID_W - 1, y_card + NID_H - 1], outline="#9ca3af", width=1)
         return sheet
 
     sheet = Image.new("RGB", (A4_W, A4_H), "white")
     draw = ImageDraw.Draw(sheet)
 
     x = (A4_W - NID_W) // 2
-    y_front = 380
-    gap = 170
+    y_front = 300
+    gap = 140
     y_back = y_front + NID_H + gap
 
     sheet.paste(front, (x, y_front))
     sheet.paste(back, (x, y_back))
 
-    # hairline frame INSIDE the card area (keeps the exact size)
+    # Subtle 1px hairline border around the card edge only (no text, no rulers, no dashed lines)
     for y in (y_front, y_back):
-        draw.rectangle([x, y, x + NID_W - 1, y + NID_H - 1], outline="#6b7280", width=1)
+        draw.rectangle([x, y, x + NID_W - 1, y + NID_H - 1], outline="#9ca3af", width=1)
 
-    draw.text((x - 24, 150), f"ID / NID CARD - ACTUAL SIZE {NID_W_MM:.1f} x {NID_H_MM:.1f} mm", fill="#111827", font=f_title)
-    draw.text((x - 24, 215), "Print at 100% (Actual size / No scaling). Cut along the dashed lines.", fill="#4b5563", font=f_small)
-    draw.text((x - 24, y_front - 70), "FRONT", fill="#374151", font=f_label)
-    draw.text((x - 24, y_back - 70), "BACK", fill="#374151", font=f_label)
-
-    for y in (y_front, y_back):
-        _dashed_rect(draw, x - margin, y - margin, x + NID_W + margin, y + NID_H + margin)
-
-    # 50 mm scale ruler
-    ruler_y = y_back + NID_H + 260
-    ruler_len = mm_to_px(50)
-    draw.line([(x, ruler_y), (x + ruler_len, ruler_y)], fill="#111827", width=3)
-    for mm in range(0, 51, 10):
-        tx = x + mm_to_px(mm)
-        draw.line([(tx, ruler_y - 14), (tx, ruler_y + 14)], fill="#111827", width=3)
-    draw.text((x, ruler_y + 30), "Scale check: this line must measure exactly 50 mm.", fill="#4b5563", font=f_small)
     return sheet
 
 
