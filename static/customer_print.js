@@ -875,6 +875,9 @@
       nid_rot_front: nidRot.front,
       nid_rot_back: nidRot.back,
       orientation: checked('orientation') || 'portrait',
+      printer_target: (currentMode === 'studio'
+        ? ($('studioPrinterSelect') ? $('studioPrinterSelect').value : '')
+        : ($('printerSelect') ? $('printerSelect').value : '')) || '',
       payment_method: paymentMethod,
       trx_id: trxId,
       customer_name: $('custNameInput').value.trim() || 'Walk-in'

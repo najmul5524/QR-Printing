@@ -307,6 +307,17 @@
           </div>
         </div>
 
+        <!-- Printer Selection Dropdown -->
+        <div id="printerSelectWrapper" class="pt-2 border-t">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">🖨️ কোন প্রিন্টারে প্রিন্ট করবেন? (প্রিন্টার সিলেকশন)</label>
+          <select id="printerSelect" class="w-full px-3 py-2.5 border-2 border-gray-200 focus:border-pink-500 rounded-xl text-xs font-bold bg-white text-gray-800 outline-none transition cursor-pointer">
+            <option value="">⚡ অটো / ডিফল্ট প্রিন্টার (দোকানের মূল প্রিন্টার)</option>
+            {% for p in printers %}
+            <option value="{{ p.printer_name }}">🖨️ {{ p.printer_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
         <!-- Copies -->
         <div class="flex items-center justify-between pt-2 border-t">
           <div>
@@ -415,6 +426,16 @@
       <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
         <input type="checkbox" id="studioBorder" checked class="w-4 h-4"> কাটার জন্য ছবির চারপাশে হালকা দাগ দিন
       </label>
+
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">🖨️ কোন প্রিন্টারে প্রিন্ট করবেন?</label>
+        <select id="studioPrinterSelect" class="w-full px-3 py-2 border-2 border-gray-200 focus:border-pink-500 rounded-xl text-xs font-bold bg-white text-gray-800 outline-none transition cursor-pointer">
+          <option value="">⚡ অটো / ডিফল্ট প্রিন্টার (দোকানের মূল প্রিন্টার)</option>
+          {% for p in printers %}
+          <option value="{{ p.printer_name }}">🖨️ {{ p.printer_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
 
       <div>
         <label class="block text-xs font-semibold text-gray-600 mb-1">শিট সংখ্যা (কপি)</label>

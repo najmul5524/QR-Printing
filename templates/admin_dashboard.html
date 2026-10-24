@@ -139,6 +139,21 @@
                   {{ "এক পিঠ" if o.duplex == "single" else "উভয় পিঠ" }} • 
                   {{ o.paper_size }} ({{ "Landscape" if o.orientation == "landscape" else "Portrait" }})
                 </div>
+                {% if o.status in ["pending_payment", "paid", "printing"] %}
+                <div class="mt-1">
+                  <select id="rowPrinter-{{ o.id }}" onchange="quickUpdatePrinter('{{ o.id }}', this.value)" class="px-2 py-1 border rounded-lg text-[11px] font-bold bg-gray-50 text-gray-800 max-w-[210px]">
+                    <option value="">🖨️ ডিফল্ট প্রিন্টার (অটো)</option>
+                    {% for p in printers %}
+                    <option value="{{ p.printer_name }}" {{ 'selected' if o.printer_target == p.printer_name else '' }}>🖨️ {{ p.printer_name }}</option>
+                    {% endfor %}
+                    {% if o.printer_target and o.printer_target not in (printers | map(attribute='printer_name') | list) %}
+                    <option value="{{ o.printer_target }}" selected>🖨️ {{ o.printer_target }}</option>
+                    {% endif %}
+                  </select>
+                </div>
+                {% elif o.printer_target %}
+                <div class="text-[10px] text-indigo-700 font-bold mt-0.5">🖨️ {{ o.printer_target }}</div>
+                {% endif %}
               </td>
               <td class="px-6 py-4 font-bold text-sm text-gray-900">৳{{ o.total_price }}</td>
               <td class="px-6 py-4">
@@ -166,19 +181,26 @@
                   <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-100 text-gray-800">বাতিল</span>
                 {% endif %}
               </td>
-              <td class="px-6 py-4 text-right space-x-1">
+              <td class="px-6 py-4 text-right space-x-1 whitespace-nowrap">
                 <a href="/admin/order/{{ o.id }}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
                   ⬇️
                 </a>
-                <button type="button" data-order="{{ o | tojson | forceescape }}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="কমান্ড এডিট করুন">
-                  ✏️ এডিট
+                <button type="button" data-order="{{ o | tojson | forceescape }}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="লাইভ প্রিভিউ ও কমান্ড এডিট করুন">
+                  ✏️ প্রিভিউ ও এডিট
                 </button>
                 {% if o.status in ["pending_payment", "paid"] %}
                   <button onclick="approveOrder('{{ o.id }}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
-                    প্রিন্ট অনুমোদন
+                    🖨️ প্রিন্ট অনুমোদন
                   </button>
                   <button onclick="cancelOrder('{{ o.id }}')" class="px-2 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded font-bold text-xs transition">
                     বাতিল
+                  </button>
+                {% elif o.status == "printing" %}
+                  <button onclick="printOrderInBrowser('{{ o.id }}')" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold text-xs transition" title="ব্রাউজার থেকে সরাসরি প্রিন্ট করুন">
+                    🖨️ প্রিন্ট
+                  </button>
+                  <button onclick="completeOrderNow('{{ o.id }}')" class="px-2 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition" title="প্রিন্ট সম্পন্ন হিসেবে মার্ক করুন">
+                    ✓ সম্পন্ন
                   </button>
                 {% else %}
                   <span class="text-gray-400 font-semibold text-[11px]">—</span>
@@ -328,100 +350,149 @@
     </div>
   </div>
 
-  <!-- Edit Order Modal Dialog -->
-  <div id="editOrderModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-    <div class="bg-white max-w-lg w-full rounded-2xl p-6 shadow-2xl border border-gray-100 space-y-4">
+  <!-- Edit Order Modal Dialog with Live Print Preview & Printer Dropdown -->
+  <div id="editOrderModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+    <div class="bg-white max-w-4xl w-full rounded-2xl p-4 sm:p-6 shadow-2xl border border-gray-100 space-y-4 max-h-[94vh] overflow-y-auto">
       <div class="flex items-center justify-between pb-3 border-b">
         <h3 class="font-bold text-base text-gray-900 flex items-center gap-2">
-          <span>✏️</span> <span>প্রিন্ট কমান্ড পরিবর্তন ও প্রিন্টার সিলেকশন</span>
+          <span>✏️</span> <span>প্রিন্ট কমান্ড পরিবর্তন, প্রিন্টার সিলেকশন ও লাইভ প্রিভিউ</span>
         </h3>
         <button type="button" onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
       </div>
 
-      <div class="space-y-3 text-xs">
-        <div class="bg-gray-50 p-2.5 rounded-xl border flex items-center justify-between">
-          <div>
-            <p class="font-bold text-gray-800" id="editModalFilename">filename.pdf</p>
-            <p class="text-[10px] text-gray-500 font-mono" id="editModalOrderId">Order ID: #</p>
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        <!-- LEFT COLUMN: Live Print Preview (কি প্রিন্ট হচ্ছে এবং কিভাবে প্রিন্ট হচ্ছে) -->
+        <div class="lg:col-span-6 bg-slate-100 rounded-2xl p-3 border border-slate-200 flex flex-col items-center space-y-2.5">
+          <div class="w-full flex items-center justify-between text-xs px-1">
+            <span class="font-bold text-slate-800 flex items-center gap-1">
+              <span>👁️</span> <span>কিভাবে প্রিন্ট হবে (লাইভ প্রিভিউ)</span>
+            </span>
+            <span id="editPreviewBadge" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700">A4 • Portrait</span>
           </div>
-          <a id="editModalDownloadLink" href="#" target="_blank" download class="px-2.5 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-lg font-bold border border-pink-200 flex items-center gap-1">
-            <span>⬇️</span> <span>ডকুমেন্ট ডাউনলোড</span>
-          </a>
-        </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">কপি সংখ্যা</label>
-            <input type="number" id="editCopies" min="1" max="100" class="w-full px-3 py-2 border rounded-lg text-sm font-bold">
+          <!-- Paper Sheet Container that dynamically changes shape for Portrait vs Landscape vs 4x6 -->
+          <div class="w-full min-h-[290px] bg-slate-200/70 rounded-xl p-3 flex flex-col items-center justify-center relative">
+            <div id="editPreviewLoading" class="hidden absolute inset-0 bg-white/70 backdrop-blur-[1px] z-10 flex items-center justify-center rounded-xl text-xs font-bold text-pink-600">
+              ⏳ প্রিভিউ আপডেট হচ্ছে...
+            </div>
+            <div id="editPaperFrame" class="w-[210px] sm:w-[235px] aspect-[210/297] bg-white rounded shadow-lg border-2 border-pink-300 p-2 flex items-center justify-center transition-all duration-300 overflow-hidden">
+              <img id="editLivePreviewImg" src="" alt="Live Print Preview" class="max-w-full max-h-full object-contain transition-all duration-200">
+            </div>
+            <p id="editLiveSummaryText" class="text-[11px] font-bold text-slate-700 mt-2 text-center"></p>
           </div>
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">প্রিন্ট মোড (কালার/B&W)</label>
-            <select id="editColorMode" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
-              <option value="bw">সাদাকালো (B&W)</option>
-              <option value="color">রঙিন (Color)</option>
-            </select>
-          </div>
-        </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">পেপার সাইজ</label>
-            <select id="editPaperSize" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
-              <option value="A4">A4 সাধারণ পেপার</option>
-              <option value="4x6">৪×৬ ফটো পেপার</option>
-              <option value="NID">NID / ID কার্ড আসল সাইজ</option>
-              <option value="PHOTO">ফটো শিট (স্টুডিও)</option>
-            </select>
-          </div>
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">পিঠ (Duplex)</label>
-            <select id="editDuplex" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
-              <option value="single">এক পিঠ (Single-sided)</option>
-              <option value="double">উভয় পিঠ (Double-sided)</option>
-            </select>
+          <!-- Multi-page navigation for PDFs -->
+          <div id="editPageNav" class="hidden w-full flex items-center justify-between bg-white px-3 py-1.5 rounded-xl border text-xs">
+            <button type="button" onclick="stepEditPreviewPage(-1)" class="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 rounded font-bold">◀ আগের পাতা</button>
+            <span id="editPageIndicator" class="font-bold text-gray-700">পাতা ১ / ১</span>
+            <button type="button" onclick="stepEditPreviewPage(1)" class="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 rounded font-bold">পরের পাতা ▶</button>
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3">
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">পেজ রেঞ্জ</label>
-            <input type="text" id="editPageRange" placeholder="all অথবা 1,3,5-7" class="w-full px-3 py-2 border rounded-lg text-sm font-mono">
+        <!-- RIGHT COLUMN: Print Command Controls & Printer Selection Dropdown -->
+        <div class="lg:col-span-6 space-y-3 text-xs">
+          <div class="bg-gray-50 p-2.5 rounded-xl border flex items-center justify-between">
+            <div class="min-w-0">
+              <p class="font-bold text-gray-800 truncate" id="editModalFilename">filename.pdf</p>
+              <p class="text-[10px] text-gray-500 font-mono" id="editModalOrderId">Order ID: #</p>
+            </div>
+            <a id="editModalDownloadLink" href="#" target="_blank" download class="px-2.5 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-lg font-bold border border-pink-200 flex items-center gap-1 shrink-0">
+              <span>⬇️</span> <span>ডাউনলোড</span>
+            </a>
           </div>
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">ওরিয়েন্টেশন</label>
-            <select id="editOrientation" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
-              <option value="portrait">Portrait</option>
-              <option value="landscape">Landscape</option>
-            </select>
-          </div>
-          <div>
-            <label class="block font-semibold text-gray-600 mb-1">মোট বিল ৳</label>
-            <input type="number" step="0.5" id="editTotalPrice" class="w-full px-3 py-2 border rounded-lg text-sm font-bold text-pink-600">
-          </div>
-        </div>
 
-        <div>
-          <label class="block font-semibold text-gray-600 mb-1">নির্দিষ্ট প্রিন্টারে প্রিন্ট দিন (প্রিন্টার সিলেকশন)</label>
-          <input type="text" id="editPrinterTarget" placeholder="খালি রাখলে উইন্ডোজের Default Printer-এ যাবে (যেমন: EPSON L3210 বা Canon G2010)" class="w-full px-3 py-2 border rounded-lg text-xs font-mono">
-          <p class="text-[10px] text-gray-400 mt-1">দোকানের পিসিতে থাকা প্রিন্টারের আসল নাম লিখুন (বা ডিফল্ট রাখুন)।</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">কপি সংখ্যা</label>
+              <input type="number" id="editCopies" min="1" max="100" oninput="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm font-bold">
+            </div>
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">প্রিন্ট মোড (কালার/B&W)</label>
+              <select id="editColorMode" onchange="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+                <option value="bw">সাদাকালো (B&W)</option>
+                <option value="color">রঙিন (Color)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">পেপার সাইজ</label>
+              <select id="editPaperSize" onchange="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+                <option value="A4">A4 সাধারণ পেপার</option>
+                <option value="4x6">৪×৬ ফটো পেপার</option>
+                <option value="NID">NID / ID কার্ড আসল সাইজ</option>
+                <option value="PHOTO">ফটো শিট (স্টুডিও)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">পিঠ (Duplex)</label>
+              <select id="editDuplex" onchange="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+                <option value="single">এক পিঠ (Single-sided)</option>
+                <option value="double">উভয় পিঠ (Double-sided)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">পেজ রেঞ্জ</label>
+              <input type="text" id="editPageRange" placeholder="all বা 1-3" oninput="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm font-mono">
+            </div>
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">ওরিয়েন্টেশন</label>
+              <select id="editOrientation" onchange="refreshAdminEditPreview()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+                <option value="portrait">📱 Portrait (লম্বালম্বি)</option>
+                <option value="landscape">🖥️ Landscape (আড়াআড়ি)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-semibold text-gray-600 mb-1">মোট বিল ৳</label>
+              <input type="number" step="0.5" id="editTotalPrice" class="w-full px-3 py-2 border rounded-lg text-sm font-bold text-pink-600">
+            </div>
+          </div>
+
+          <div class="p-3 bg-indigo-50/70 rounded-xl border border-indigo-200 space-y-2">
+            <label class="block font-bold text-indigo-950">🖨️ কোন প্রিন্টারে প্রিন্ট দেবেন? (ড্রপডাউন থেকে বাছুন)</label>
+            <select id="editPrinterTarget" onchange="refreshAdminEditPreview()" class="w-full px-3 py-2 border-2 border-indigo-200 focus:border-indigo-500 rounded-xl text-xs font-bold bg-white text-gray-900 outline-none">
+              <option value="">⚡ অটো / ডিফল্ট প্রিন্টার (দোকানের মূল প্রিন্টার)</option>
+              {% for p in printers %}
+              <option value="{{ p.printer_name }}">🖨️ {{ p.printer_name }}</option>
+              {% endfor %}
+            </select>
+
+            <!-- Quick Add New Printer to Dropdown -->
+            <div class="flex gap-1.5 pt-1">
+              <input type="text" id="newPrinterNameInput" placeholder="+ নতুন প্রিন্টারের নাম যোগ করুন (যেমন: EPSON L3210)" class="flex-1 px-2.5 py-1.5 border rounded-lg text-xs bg-white">
+              <button type="button" onclick="addNewPrinterOption()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shrink-0">যুক্ত করুন</button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="pt-3 border-t flex justify-end gap-2">
-        <button type="button" onclick="closeEditModal()" class="px-4 py-2 border rounded-xl font-bold text-xs text-gray-600">বাতিল</button>
-        <button type="button" onclick="saveOrderEdits()" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">
-          সংরক্ষণ ও আপডেট করুন
-        </button>
+      <div class="pt-3 border-t flex flex-wrap items-center justify-between gap-2">
+        <button type="button" onclick="closeEditModal()" class="px-4 py-2 border rounded-xl font-bold text-xs text-gray-600 hover:bg-gray-100">বাতিল</button>
+        <div class="flex gap-2">
+          <button type="button" onclick="saveOrderEdits(false)" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow">
+            💾 শুধু সংরক্ষণ করুন
+          </button>
+          <button type="button" onclick="saveOrderEdits(true)" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white font-bold text-xs rounded-xl transition shadow flex items-center gap-1">
+            <span>🖨️</span> <span>আপডেট ও এখনই প্রিন্ট দিন</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
 
+  <!-- Hidden iframe for direct browser printing when Windows Agent is offline -->
+  <iframe id="browserPrintFrame" class="hidden w-0 h-0 border-0"></iframe>
+
   <script>
     const SHOP_ID = {{ shop.id }};
+    let SHOP_PRINTERS = {{ printers | tojson }};
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const adminSocket = new WebSocket(`${proto}//${location.host}/ws/admin/${SHOP_ID}`);
 
-    // Simple Audio Chime using Web Audio API (no external file needed!)
     function playChime() {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -430,15 +501,13 @@
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
         gain.gain.setValueAtTime(0.3, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
         osc.start();
         osc.stop(ctx.currentTime + 0.6);
-      } catch (e) {
-        console.log("Audio play error", e);
-      }
+      } catch (e) {}
     }
 
     adminSocket.onmessage = (event) => {
@@ -450,8 +519,13 @@
         addNewOrderRow(msg.order);
       } else if (msg.event === 'ORDER_UPDATED' || msg.event === 'PAYMENT_SUBMITTED') {
         location.reload();
+      } else if (msg.event === 'PRINT_FAILED') {
+        alert('⚠️ এজেন্ট প্রিন্ট নোট: ' + (msg.reason || 'প্রিন্টার চেক করুন'));
+        location.reload();
       } else if (msg.event === 'AGENT_STATUS') {
         updateAgentUI(msg.online);
+      } else if (msg.event === 'PRINTERS_SYNCED' && Array.isArray(msg.printers)) {
+        SHOP_PRINTERS = msg.printers;
       } else if (msg.event === 'NEW_TRANSFER') {
         playChime();
         loadTransfers();
@@ -477,11 +551,123 @@
       }
     }
 
+    let currentEditingOrder = null;
     let currentEditingOrderId = null;
+    let editPreviewPage = 1;
+
+    function ensurePrinterOptionExists(selectEl, printerName) {
+      if (!selectEl || !printerName) return;
+      const exists = Array.from(selectEl.options).some(opt => opt.value === printerName);
+      if (!exists) {
+        const opt = document.createElement('option');
+        opt.value = printerName;
+        opt.innerText = '🖨️ ' + printerName;
+        selectEl.appendChild(opt);
+      }
+    }
+
+    async function addNewPrinterOption() {
+      const inp = document.getElementById('newPrinterNameInput');
+      const name = (inp.value || '').trim();
+      if (!name) { alert('প্রিন্টারের নাম লিখুন।'); return; }
+      try {
+        const res = await fetch('/admin/printers/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ printer_name: name, printer_type: 'all' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          SHOP_PRINTERS = data.printers || SHOP_PRINTERS;
+          const sel = document.getElementById('editPrinterTarget');
+          ensurePrinterOptionExists(sel, name);
+          sel.value = name;
+          inp.value = '';
+          refreshAdminEditPreview();
+        }
+      } catch (e) {
+        alert('প্রিন্টার যোগ করা যায়নি: ' + e);
+      }
+    }
+
+    async function quickUpdatePrinter(orderId, printerName) {
+      try {
+        await fetch(`/admin/order/${orderId}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ printer_target: printerName })
+        });
+      } catch (e) {}
+    }
+
+    function stepEditPreviewPage(delta) {
+      if (!currentEditingOrder) return;
+      const maxP = Math.max(1, parseInt(currentEditingOrder.page_count || 1, 10));
+      editPreviewPage = Math.max(1, Math.min(maxP, editPreviewPage + delta));
+      refreshAdminEditPreview();
+    }
+
+    function refreshAdminEditPreview() {
+      if (!currentEditingOrderId) return;
+      const color = document.getElementById('editColorMode').value || 'bw';
+      const paper = document.getElementById('editPaperSize').value || 'A4';
+      const duplex = document.getElementById('editDuplex').value || 'single';
+      const orient = document.getElementById('editOrientation').value || 'portrait';
+      const copies = parseInt(document.getElementById('editCopies').value, 10) || 1;
+      const printer = document.getElementById('editPrinterTarget').value || 'ডিফল্ট প্রিন্টার';
+
+      const frame = document.getElementById('editPaperFrame');
+      const badge = document.getElementById('editPreviewBadge');
+      const summary = document.getElementById('editLiveSummaryText');
+      const loader = document.getElementById('editPreviewLoading');
+      const img = document.getElementById('editLivePreviewImg');
+
+      const colorBn = color === 'bw' ? 'সাদাকালো (B&W)' : 'রঙিন (Color)';
+      const orientBn = orient === 'landscape' ? 'আড়াআড়ি (Landscape)' : 'লম্বালম্বি (Portrait)';
+      const duplexBn = duplex === 'double' ? 'উভয় পিঠ' : 'এক পিঠ';
+
+      if (badge) {
+        badge.innerText = `${paper} • ${orient === 'landscape' ? 'Landscape' : 'Portrait'} • ${color === 'bw' ? 'B&W' : 'Color'}`;
+        badge.className = 'text-[10px] px-2.5 py-0.5 rounded-full font-bold ' +
+          (color === 'bw' ? 'bg-gray-200 text-gray-800' : 'bg-pink-100 text-pink-700');
+      }
+
+      if (summary) {
+        summary.innerText = `${colorBn} • ${orientBn} • ${duplexBn} • ${copies} কপি • 🖨️ ${printer}`;
+      }
+
+      if (frame) {
+        if (paper === '4x6') {
+          frame.className = 'w-[195px] sm:w-[215px] aspect-[4/6] bg-white rounded shadow-lg border-2 border-pink-300 p-2 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        } else if (orient === 'landscape') {
+          frame.className = 'w-full max-w-[330px] aspect-[297/210] bg-white rounded shadow-lg border-2 border-pink-300 p-2 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        } else {
+          frame.className = 'w-[205px] sm:w-[230px] aspect-[210/297] bg-white rounded shadow-lg border-2 border-pink-300 p-2 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        }
+      }
+
+      const maxP = Math.max(1, parseInt((currentEditingOrder && currentEditingOrder.page_count) || 1, 10));
+      const nav = document.getElementById('editPageNav');
+      if (nav) {
+        nav.classList.toggle('hidden', maxP <= 1);
+        document.getElementById('editPageIndicator').innerText = `পাতা ${editPreviewPage} / ${maxP}`;
+      }
+
+      if (img && loader) {
+        loader.classList.remove('hidden');
+        img.onload = () => loader.classList.add('hidden');
+        img.onerror = () => {
+          loader.classList.add('hidden');
+        };
+        img.src = `/admin/order/${encodeURIComponent(currentEditingOrderId)}/preview?color=${encodeURIComponent(color)}&orientation=${encodeURIComponent(orient)}&paper_size=${encodeURIComponent(paper)}&page=${editPreviewPage}&t=${Date.now()}`;
+      }
+    }
 
     function openEditModal(order) {
       if (!order) return;
+      currentEditingOrder = order;
       currentEditingOrderId = order.id;
+      editPreviewPage = 1;
       document.getElementById('editModalOrderId').innerText = `Order ID: #${order.id}`;
       document.getElementById('editModalFilename').innerText = order.original_filename || 'document';
       document.getElementById('editModalDownloadLink').href = `/admin/order/${order.id}/file`;
@@ -492,17 +678,26 @@
       document.getElementById('editPageRange').value = order.page_range || 'all';
       document.getElementById('editOrientation').value = order.orientation || 'portrait';
       document.getElementById('editTotalPrice').value = order.total_price || 0;
-      document.getElementById('editPrinterTarget').value = order.printer_target || '';
+
+      const sel = document.getElementById('editPrinterTarget');
+      const rowSel = document.getElementById(`rowPrinter-${order.id}`);
+      const activePrinter = (rowSel ? rowSel.value : order.printer_target) || '';
+      ensurePrinterOptionExists(sel, activePrinter);
+      sel.value = activePrinter;
+
       document.getElementById('editOrderModal').classList.remove('hidden');
+      refreshAdminEditPreview();
     }
 
     function closeEditModal() {
       document.getElementById('editOrderModal').classList.add('hidden');
       currentEditingOrderId = null;
+      currentEditingOrder = null;
     }
 
-    async function saveOrderEdits() {
+    async function saveOrderEdits(andApprove = false) {
       if (!currentEditingOrderId) return;
+      const targetOrderId = currentEditingOrderId;
       const payload = {
         copies: parseInt(document.getElementById('editCopies').value, 10) || 1,
         color_mode: document.getElementById('editColorMode').value,
@@ -514,16 +709,19 @@
         printer_target: document.getElementById('editPrinterTarget').value.trim()
       };
       try {
-        const res = await fetch(`/admin/order/${currentEditingOrderId}/update`, {
+        const res = await fetch(`/admin/order/${targetOrderId}/update`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (data.success) {
-          alert('কমান্ড সফলভাবে আপডেট করা হয়েছে!');
           closeEditModal();
-          location.reload();
+          if (andApprove) {
+            await approveOrder(targetOrderId, true, payload.printer_target);
+          } else {
+            location.reload();
+          }
         } else {
           alert('আপডেট ব্যর্থ হয়েছে: ' + (data.detail || ''));
         }
@@ -539,7 +737,12 @@
       const tbody = document.getElementById('ordersTableBody');
       const tr = document.createElement('tr');
       tr.id = `row-${o.id}`;
-      tr.className = 'bg-yellow-50/70 hover:bg-gray-50 transition animate-pulse';
+      tr.className = 'bg-yellow-50/70 hover:bg-gray-50 transition';
+
+      const printerOpts = [
+        `<option value="">🖨️ ডিফল্ট প্রিন্টার (অটো)</option>`,
+        ...(SHOP_PRINTERS || []).map(p => `<option value="${esc(p.printer_name)}" ${o.printer_target === p.printer_name ? 'selected' : ''}>🖨️ ${esc(p.printer_name)}</option>`)
+      ].join('');
 
       tr.innerHTML = `
         <td class="px-6 py-4 font-mono font-bold text-gray-900">#${o.id}</td>
@@ -552,7 +755,12 @@
           <div class="text-gray-500 text-[11px]">
             ${o.color_mode === 'bw' ? 'সাদাকালো' : 'কালার'} • 
             ${o.duplex === 'single' ? 'এক পিঠ' : 'উভয় পিঠ'} • 
-            ${esc(o.paper_size)}
+            ${esc(o.paper_size)} (${o.orientation === 'landscape' ? 'Landscape' : 'Portrait'})
+          </div>
+          <div class="mt-1">
+            <select id="rowPrinter-${o.id}" onchange="quickUpdatePrinter('${o.id}', this.value)" class="px-2 py-1 border rounded-lg text-[11px] font-bold bg-gray-50 text-gray-800 max-w-[210px]">
+              ${printerOpts}
+            </select>
           </div>
         </td>
         <td class="px-6 py-4 font-bold text-sm text-gray-900">৳${o.total_price}</td>
@@ -562,15 +770,15 @@
         <td class="px-6 py-4">
           <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-yellow-100 text-yellow-800">পেমেন্ট অপেক্ষমাণ</span>
         </td>
-        <td class="px-6 py-4 text-right space-x-1">
+        <td class="px-6 py-4 text-right space-x-1 whitespace-nowrap">
           <a href="/admin/order/${o.id}/file" target="_blank" download class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-bold text-xs inline-block transition" title="ফাইল ডাউনলোড">
             ⬇️
           </a>
-          <button type="button" data-order="${esc(JSON.stringify(o))}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="কমান্ড এডিট করুন">
-            ✏️ এডিট
+          <button type="button" data-order="${esc(JSON.stringify(o))}" onclick="openEditModal(JSON.parse(this.dataset.order))" class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold text-xs transition" title="লাইভ প্রিভিউ ও কমান্ড এডিট করুন">
+            ✏️ প্রিভিউ ও এডিট
           </button>
           <button onclick="approveOrder('${o.id}')" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-xs transition">
-            প্রিন্ট অনুমোদন
+            🖨️ প্রিন্ট অনুমোদন
           </button>
           <button onclick="cancelOrder('${o.id}')" class="px-2 py-1 bg-gray-100 hover:bg-red-50 text-red-600 rounded font-bold text-xs transition">
             বাতিল
@@ -580,13 +788,57 @@
       tbody.prepend(tr);
     }
 
-    async function approveOrder(orderId) {
-      if (!confirm('আপনি কি এই অর্ডারটি প্রিন্ট করার অনুমোদন দিতে চান?')) return;
+    // Direct Browser Print fallback when Windows Agent is offline (or when printing directly from browser)
+    function printOrderInBrowser(orderId) {
+      const w = window.open(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1`, '_blank');
+      if (w) {
+        w.onload = () => {
+          try {
+            w.focus();
+            w.print();
+          } catch (e) {}
+        };
+        setTimeout(async () => {
+          if (confirm('প্রিন্টার কি প্রিন্ট সম্পন্ন করেছে? (ওকে চাপলে অর্ডারটি "✓ সম্পন্ন" হিসেবে মার্ক হবে)')) {
+            await completeOrderNow(orderId);
+          } else {
+            location.reload();
+          }
+        }, 2500);
+      } else {
+        alert('পপ-আপ ব্লক করা হয়েছে। অনুগ্রহ করে ব্রাউজারে Pop-up allow করুন অথবা ডাউনলোড করে প্রিন্ট দিন।');
+      }
+    }
+
+    async function completeOrderNow(orderId) {
       try {
-        const res = await fetch(`/admin/order/${orderId}/approve`, { method: 'POST' });
+        const res = await fetch(`/admin/order/${encodeURIComponent(orderId)}/complete`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) location.reload();
+      } catch (e) {
+        alert('ত্রুটি ঘটেছে: ' + e);
+      }
+    }
+
+    async function approveOrder(orderId, skipConfirm = false, overridePrinter = null) {
+      if (!skipConfirm && !confirm('আপনি কি এই অর্ডারটি প্রিন্ট করার অনুমোদন দিতে চান?')) return;
+      const rowSel = document.getElementById(`rowPrinter-${orderId}`);
+      const chosenPrinter = overridePrinter !== null ? overridePrinter : (rowSel ? rowSel.value : '');
+      try {
+        const res = await fetch(`/admin/order/${orderId}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ printer_target: chosenPrinter })
+        });
         const data = await res.json();
         if (data.success) {
-          location.reload();
+          if (data.dispatched) {
+            // Windows Agent is connected and printing automatically
+            location.reload();
+          } else {
+            // Windows Agent is not running -> open Browser Print Dialog immediately so printing starts right now!
+            printOrderInBrowser(orderId);
+          }
         }
       } catch (e) {
         alert('ত্রুটি ঘটেছে। আবার চেষ্টা করুন।');

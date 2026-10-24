@@ -457,3 +457,86 @@ def delete_room_file(file_id: str):
     conn.execute("DELETE FROM room_files WHERE id = ?", (file_id,))
     conn.commit()
     conn.close()
+
+
+# ── Shop Printers Helpers ──
+DEFAULT_SHOP_PRINTERS = [
+    ("EPSON Color Inkjet (রঙিন ও ফটো প্রিন্টার)", "color"),
+    ("Canon / HP LaserJet (সাদাকালো ফাস্ট প্রিন্টার)", "bw"),
+]
+
+def get_shop_printers(shop_id: int) -> List[Dict[str, Any]]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM printers WHERE shop_id = ? ORDER BY is_online DESC, id ASC",
+        (shop_id,)
+    ).fetchall()
+    if not rows:
+        now = datetime.now().isoformat()
+        for p_name, p_type in DEFAULT_SHOP_PRINTERS:
+            conn.execute(
+                "INSERT INTO printers (shop_id, printer_name, printer_type, is_online, last_seen) VALUES (?, ?, ?, 1, ?)",
+                (shop_id, p_name, p_type, now)
+            )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM printers WHERE shop_id = ? ORDER BY is_online DESC, id ASC",
+            (shop_id,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def add_shop_printer(shop_id: int, printer_name: str, printer_type: str = "all") -> int:
+    name = (printer_name or "").strip()[:100]
+    if not name:
+        return 0
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM printers WHERE shop_id = ? AND LOWER(printer_name) = LOWER(?)",
+        (shop_id, name)
+    ).fetchone()
+    now = datetime.now().isoformat()
+    if existing:
+        conn.execute("UPDATE printers SET printer_type = ?, is_online = 1, last_seen = ? WHERE id = ?", (printer_type, now, existing["id"]))
+        pid = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO printers (shop_id, printer_name, printer_type, is_online, last_seen) VALUES (?, ?, ?, 1, ?)",
+            (shop_id, name, printer_type, now)
+        )
+        pid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return pid
+
+def delete_shop_printer(shop_id: int, printer_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM printers WHERE id = ? AND shop_id = ?", (printer_id, shop_id))
+    conn.commit()
+    conn.close()
+
+def sync_agent_printers(shop_id: int, printer_names: List[str]):
+    if not printer_names:
+        return
+    conn = get_db()
+    now = datetime.now().isoformat()
+    for raw_name in printer_names:
+        name = str(raw_name or "").strip()[:100]
+        if not name:
+            continue
+        # Skip virtual OS printers unless they are the only ones
+        if any(skip in name.lower() for skip in ("onenote", "fax", "xps document writer")):
+            continue
+        existing = conn.execute(
+            "SELECT id FROM printers WHERE shop_id = ? AND LOWER(printer_name) = LOWER(?)",
+            (shop_id, name)
+        ).fetchone()
+        if existing:
+            conn.execute("UPDATE printers SET is_online = 1, last_seen = ? WHERE id = ?", (now, existing["id"]))
+        else:
+            conn.execute(
+                "INSERT INTO printers (shop_id, printer_name, printer_type, is_online, last_seen) VALUES (?, ?, 'all', 1, ?)",
+                (shop_id, name, now)
+            )
+    conn.commit()
+    conn.close()

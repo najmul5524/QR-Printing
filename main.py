@@ -333,6 +333,7 @@ async def admin_dashboard(request: Request):
     
     orders = db.get_shop_orders(shop["id"])
     stats = db.get_shop_stats(shop["id"])
+    printers = db.get_shop_printers(shop["id"])
     is_agent_online = len(manager.agent_connections.get(shop["id"], [])) > 0
     
     # Base URL for customer link
@@ -342,6 +343,7 @@ async def admin_dashboard(request: Request):
         "shop": shop,
         "orders": orders,
         "stats": stats,
+        "printers": printers,
         "is_agent_online": is_agent_online,
         "customer_url": customer_url
     })
@@ -404,6 +406,16 @@ async def approve_order(order_id: str, request: Request):
     order = db.get_order(order_id)
     if not order or order["shop_id"] != shop["id"]:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # Allow optional printer_target override right from the approve action
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "printer_target" in body:
+            pt = str(body.get("printer_target") or "").strip()[:100]
+            db.update_order_details(order_id, {"printer_target": pt})
+            order["printer_target"] = pt
+    except Exception:
+        pass
     
     # Mark as paid and ready to print
     db.update_order_status(order_id, "paid")
@@ -426,8 +438,8 @@ async def approve_order(order_id: str, request: Request):
         "duplex": order["duplex"],
         "paper_size": order["paper_size"],
         "page_range": order["page_range"],
-        "printer_name": order["printer_target"] if "printer_target" in order.keys() and order["printer_target"] else "",
-        "orientation": order["orientation"] if "orientation" in order.keys() and order["orientation"] else "portrait"
+        "printer_name": order.get("printer_target") or "",
+        "orientation": order.get("orientation") or "portrait"
     })
     
     if job_dispatched:
@@ -440,7 +452,30 @@ async def approve_order(order_id: str, request: Request):
     
     # Notify admin UI to refresh
     await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id})
-    return {"success": True, "dispatched": job_dispatched}
+    return {"success": True, "dispatched": job_dispatched, "order": {k: v for k, v in order.items() if k != "file_path"}}
+
+
+@app.post("/admin/order/{order_id}/complete")
+async def admin_complete_order(order_id: str, request: Request):
+    """Marks an order as completed when printed directly from the browser or confirmed by the shopkeeper."""
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    order = db.get_order(order_id)
+    if not order or order["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    now = datetime.now().isoformat()
+    db.update_order_status(order_id, "completed", printed_at=now)
+    utils.secure_delete_file(order["file_path"])
+
+    await manager.notify_order(order_id, {
+        "event": "STATUS_CHANGE",
+        "status": "completed",
+        "message": "প্রিন্ট সম্পন্ন হয়েছে! আপনার ফাইলটি সার্ভার থেকে স্বয়ংক্রিয়ভাবে মুছে দেওয়া হয়েছে।"
+    })
+    await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id, "status": "completed"})
+    return {"success": True}
 
 @app.post("/admin/order/{order_id}/cancel")
 async def cancel_order(order_id: str, request: Request):
@@ -500,7 +535,7 @@ async def edit_order_details(order_id: str, request: Request):
     return {"success": True, "updated": updates}
 
 @app.get("/admin/order/{order_id}/file")
-async def admin_download_order_file(order_id: str, request: Request):
+async def admin_download_order_file(order_id: str, request: Request, inline: int = 0):
     shop = get_current_shop(request)
     if not shop:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -509,11 +544,77 @@ async def admin_download_order_file(order_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Order not found")
     if not os.path.exists(order["file_path"]):
         raise HTTPException(status_code=404, detail="File has been deleted or not found")
+    ext = utils.get_ext(order["file_path"])
+    mtype = "application/pdf" if ext == "pdf" else ("image/jpeg" if ext in ("jpg", "jpeg") else "image/png")
     return FileResponse(
         order["file_path"],
         filename=order["original_filename"],
-        content_disposition_type="attachment"
+        media_type=mtype,
+        content_disposition_type="inline" if inline else "attachment"
     )
+
+
+@app.get("/admin/order/{order_id}/preview")
+def admin_preview_order_sheet(
+    order_id: str,
+    request: Request,
+    color: str = "",
+    orientation: str = "",
+    paper_size: str = "",
+    page: int = 1
+):
+    """Renders a live preview of how an order will be printed inside the Admin Edit/Print modal."""
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    order = db.get_order(order_id)
+    if not order or order["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="Order not found")
+    path = order["file_path"]
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found or already printed")
+
+    eff_color = clean_choice(color or order.get("color_mode", "bw"), ("bw", "color"), "bw")
+    eff_orient = clean_choice(orientation or order.get("orientation", "portrait"), ("portrait", "landscape"), "portrait")
+    eff_paper = clean_choice(paper_size or order.get("paper_size", "A4"), ("A4", "4x6", "NID", "PHOTO"), "A4")
+
+    ext = utils.get_ext(path)
+    if ext == "pdf":
+        if not utils.PDF_RENDER_AVAILABLE:
+            raise HTTPException(status_code=501, detail="PDF preview renderer unavailable")
+        try:
+            data = utils.render_pdf_page_preview(path, max(0, page - 1), eff_color, orientation=eff_orient)
+            return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    else:
+        p_mode = "4x6" if eff_paper == "4x6" else "A4"
+        data = utils.render_image_preview(path, p_mode, eff_color, orientation=eff_orient)
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/admin/printers/add")
+async def admin_add_printer(request: Request):
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    data = await request.json()
+    pname = str(data.get("printer_name", "")).strip()
+    ptype = clean_choice(data.get("printer_type", "all"), ("bw", "color", "all"), "all")
+    if not pname:
+        raise HTTPException(status_code=400, detail="প্রিন্টারের নাম লিখুন")
+    db.add_shop_printer(shop["id"], pname, ptype)
+    return {"success": True, "printers": db.get_shop_printers(shop["id"])}
+
+
+@app.post("/admin/printers/{printer_id}/delete")
+async def admin_delete_printer(printer_id: int, request: Request):
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    db.delete_shop_printer(shop["id"], printer_id)
+    return {"success": True, "printers": db.get_shop_printers(shop["id"])}
+
 
 # ── CUSTOMER FLOW (/p/{shop_code}) ──
 
@@ -522,9 +623,10 @@ async def customer_portal(shop_code: str, request: Request):
     shop = db.get_shop_by_code(shop_code.strip().lower())
     if not shop:
         return HTMLResponse("<h2>দুঃখিত! এই শপ কোডের কোনো দোকান খুঁজে পাওয়া যায়নি।</h2>", status_code=404)
-    
+    printers = db.get_shop_printers(shop["id"])
     return templates.TemplateResponse(request=request, name="customer_print.html", context={
-        "shop": shop
+        "shop": shop,
+        "printers": printers
     })
 
 # ── Upload helpers ──
@@ -1237,7 +1339,7 @@ async def customer_create_order(request: Request):
         "duplex": duplex,
         "page_range": "all",
         "orientation": orientation,
-        "printer_target": "",
+        "printer_target": str(data.get("printer_target", "") or "").strip()[:100],
         "total_price": round(total_price, 2),
         "payment_method": payment_method,
         "trx_id": re.sub(r"[^A-Za-z0-9]", "", str(data.get("trx_id", "")))[:30],
@@ -1798,7 +1900,12 @@ async def websocket_agent(websocket: WebSocket, api_key: str):
         while True:
             data = await websocket.receive_json()
             event = data.get("event")
-            if event == "PRINT_COMPLETED":
+            if event == "REGISTER_PRINTERS":
+                p_list = data.get("printers", [])
+                if isinstance(p_list, list):
+                    db.sync_agent_printers(shop_id, p_list)
+                    await manager.notify_admin(shop_id, {"event": "PRINTERS_SYNCED", "printers": db.get_shop_printers(shop_id)})
+            elif event == "PRINT_COMPLETED":
                 order_id = data.get("order_id")
                 order = db.get_order(order_id)
                 if not order or order["shop_id"] != shop_id:
@@ -1811,6 +1918,13 @@ async def websocket_agent(websocket: WebSocket, api_key: str):
                     "message": "প্রিন্ট সম্পন্ন হয়েছে! ফাইলটি মুছে ফেলা হয়েছে।"
                 })
                 await manager.notify_admin(shop_id, {"event": "ORDER_UPDATED", "order_id": order_id})
+            elif event == "PRINT_FAILED":
+                order_id = data.get("order_id")
+                reason = data.get("reason", "প্রিন্টার সংযোগ পাওয়া যায়নি")
+                order = db.get_order(order_id)
+                if order and order["shop_id"] == shop_id:
+                    db.update_order_status(order_id, "paid")
+                    await manager.notify_admin(shop_id, {"event": "PRINT_FAILED", "order_id": order_id, "reason": reason})
     except WebSocketDisconnect:
         manager.disconnect_agent(shop_id, websocket)
         await manager.notify_admin(shop_id, {"event": "AGENT_STATUS", "online": False})
