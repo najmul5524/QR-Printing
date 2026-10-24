@@ -555,6 +555,7 @@
     let currentEditingOrder = null;
     let currentEditingOrderId = null;
     let editPreviewPage = 1;
+    let lastEditPreviewUrl = '';
 
     function ensurePrinterOptionExists(selectEl, printerName) {
       if (!selectEl || !printerName) return;
@@ -697,12 +698,16 @@
       }
 
       if (img && loader) {
-        loader.classList.remove('hidden');
-        img.onload = () => loader.classList.add('hidden');
-        img.onerror = () => {
-          loader.classList.add('hidden');
-        };
-        img.src = `/admin/order/${encodeURIComponent(currentEditingOrderId)}/preview?color=${encodeURIComponent(color)}&orientation=${encodeURIComponent(orient)}&paper_size=${encodeURIComponent(paper)}&page=${editPreviewPage}&t=${Date.now()}`;
+        const nextPreviewUrl = `/admin/order/${encodeURIComponent(currentEditingOrderId)}/preview?color=${encodeURIComponent(color)}&orientation=${encodeURIComponent(orient)}&paper_size=${encodeURIComponent(paper)}&page=${editPreviewPage}`;
+        if (lastEditPreviewUrl !== nextPreviewUrl) {
+          lastEditPreviewUrl = nextPreviewUrl;
+          loader.classList.remove('hidden');
+          img.onload = () => loader.classList.add('hidden');
+          img.onerror = () => {
+            loader.classList.add('hidden');
+          };
+          img.src = nextPreviewUrl;
+        }
       }
     }
 
@@ -711,6 +716,7 @@
       currentEditingOrder = order;
       currentEditingOrderId = order.id;
       editPreviewPage = 1;
+      lastEditPreviewUrl = '';
       document.getElementById('editModalOrderId').innerText = `Order ID: #${order.id}`;
       document.getElementById('editModalFilename').innerText = order.original_filename || 'document';
       document.getElementById('editModalDownloadLink').href = `/admin/order/${order.id}/file`;
@@ -735,6 +741,7 @@
       document.getElementById('editOrderModal').classList.add('hidden');
       currentEditingOrderId = null;
       currentEditingOrder = null;
+      lastEditPreviewUrl = '';
     }
 
     async function saveOrderEdits(andApprove = false) {
@@ -830,25 +837,137 @@
       tbody.prepend(tr);
     }
 
-    // Direct Browser Print fallback when Windows Agent is offline (or when printing directly from browser)
-    function printOrderInBrowser(orderId) {
-      const w = window.open(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1`, '_blank');
-      if (w) {
-        w.onload = () => {
-          try {
-            w.focus();
-            w.print();
-          } catch (e) {}
+    // Direct Clean Browser Print (Zero headers/footers, no Render URL path on paper)
+    async function printOrderInBrowser(orderId) {
+      try {
+        // Find order metadata from row button if available
+        let orderMeta = {};
+        const rowBtn = document.querySelector(`#row-${orderId} button[data-order]`);
+        if (rowBtn && rowBtn.dataset.order) {
+          try { orderMeta = JSON.parse(rowBtn.dataset.order); } catch (e) {}
+        }
+
+        const res = await fetch(`/admin/order/${encodeURIComponent(orderId)}/file?inline=1`);
+        if (!res.ok) {
+          alert('ফাইলটি পাওয়া যায়নি বা ইতিমধ্যে প্রিন্ট হয়ে গেছে।');
+          return;
+        }
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        let frame = document.getElementById('cleanBrowserPrintFrame');
+        if (frame) frame.remove();
+        frame = document.createElement('iframe');
+        frame.id = 'cleanBrowserPrintFrame';
+        frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+        document.body.appendChild(frame);
+
+        const origTitle = document.title;
+        const restoreAndConfirm = () => {
+          document.title = origTitle;
+          setTimeout(async () => {
+            if (confirm('প্রিন্টার কি প্রিন্ট সম্পন্ন করেছে? (ওকে চাপলে অর্ডারটি "✓ সম্পন্ন" হিসেবে মার্ক হবে এবং সার্ভার থেকে ফাইল মুছে যাবে)')) {
+              URL.revokeObjectURL(blobUrl);
+              await completeOrderNow(orderId);
+            } else {
+              URL.revokeObjectURL(blobUrl);
+              location.reload();
+            }
+          }, 1200);
         };
-        setTimeout(async () => {
-          if (confirm('প্রিন্টার কি প্রিন্ট সম্পন্ন করেছে? (ওকে চাপলে অর্ডারটি "✓ সম্পন্ন" হিসেবে মার্ক হবে)')) {
-            await completeOrderNow(orderId);
+
+        if (contentType.includes('pdf')) {
+          document.title = ' ';
+          frame.src = blobUrl;
+          frame.onload = () => {
+            try {
+              frame.contentWindow.focus();
+              frame.contentWindow.print();
+            } catch (e) {}
+            restoreAndConfirm();
+          };
+        } else {
+          // Image print: strict @page { margin: 0mm !important } guarantees NO browser header/footer/URL on paper
+          const orient = (orderMeta.orientation === 'landscape') ? 'landscape' : 'portrait';
+          const paper = (orderMeta.paper_size === '4x6') ? '4in 6in' : `A4 ${orient}`;
+          const bwFilter = (orderMeta.color_mode === 'bw') ? 'filter: grayscale(100%);' : '';
+
+          document.title = ' ';
+          const doc = frame.contentWindow.document;
+          doc.open();
+          doc.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>&nbsp;</title>
+  <style>
+    @page {
+      size: ${paper};
+      margin: 0mm !important;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+      overflow: hidden;
+    }
+    .print-page {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 !important;
+      padding: 0 !important;
+      page-break-after: avoid;
+      page-break-inside: avoid;
+    }
+    img {
+      max-width: 100%;
+      max-height: 100%;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      margin: 0 !important;
+      padding: 0 !important;
+      ${bwFilter}
+    }
+  </style>
+</head>
+<body>
+  <div class="print-page">
+    <img id="printTargetImg" src="${blobUrl}" alt="" />
+  </div>
+</body>
+</html>`);
+          doc.close();
+
+          const imgEl = doc.getElementById('printTargetImg');
+          const triggerPrint = () => {
+            try {
+              frame.contentWindow.focus();
+              frame.contentWindow.print();
+            } catch (e) {}
+            restoreAndConfirm();
+          };
+          if (imgEl.complete) {
+            triggerPrint();
           } else {
-            location.reload();
+            imgEl.onload = triggerPrint;
+            imgEl.onerror = triggerPrint;
           }
-        }, 2500);
-      } else {
-        alert('পপ-আপ ব্লক করা হয়েছে। অনুগ্রহ করে ব্রাউজারে Pop-up allow করুন অথবা ডাউনলোড করে প্রিন্ট দিন।');
+        }
+      } catch (e) {
+        alert('প্রিন্ট ডায়ালগ ওপেন করতে সমস্যা হয়েছে: ' + e);
       }
     }
 

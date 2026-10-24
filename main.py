@@ -18,6 +18,7 @@ from fastapi import (
     WebSocket, WebSocketDisconnect, HTTPException, Depends, status
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, FileResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
@@ -136,6 +137,7 @@ async def lifespan(app_: FastAPI):
 
 
 app = FastAPI(title="QR Se Print - Auto Print Platform", version="1.1.0", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -584,13 +586,13 @@ def admin_preview_order_sheet(
             raise HTTPException(status_code=501, detail="PDF preview renderer unavailable")
         try:
             data = utils.render_pdf_page_preview(path, max(0, page - 1), eff_color, orientation=eff_orient)
-            return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+            return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=120"})
         except Exception as e:
             raise HTTPException(status_code=422, detail=str(e))
     else:
         p_mode = "4x6" if eff_paper == "4x6" else "A4"
         data = utils.render_image_preview(path, p_mode, eff_color, orientation=eff_orient)
-        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=120"})
 
 
 @app.get("/admin/printers")
