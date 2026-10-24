@@ -18,19 +18,48 @@
 
   <!-- Top Sticky Header -->
   <header class="bg-white border-b sticky top-0 z-40 shadow-sm">
-    <div class="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
-      <div>
-        <h1 class="font-bold text-lg text-gray-900 leading-tight">{{ shop.name }}</h1>
-        <p class="text-xs text-gray-500">প্রোপ্রাইটর: {{ shop.owner_name or "দোকানদার" }}</p>
+    <div class="max-w-lg mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <h1 class="font-bold text-lg text-gray-900 leading-tight truncate">{{ shop.name }}</h1>
+        <p class="text-xs text-gray-500 truncate">প্রোপ্রাইটর: {{ shop.owner_name or "দোকানদার" }}</p>
       </div>
-      <div class="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-semibold">
-        <span class="w-2 h-2 rounded-full bg-green-500 pulse-dot"></span>
-        <span>সক্রিয়</span>
+      <div class="flex items-center gap-2 shrink-0">
+        <button type="button" id="btnToggleRecentPrints" class="px-2.5 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 border border-pink-200 rounded-full text-xs font-bold flex items-center gap-1.5 transition shadow-sm">
+          <span>📋</span>
+          <span>সাম্প্রতিক প্রিন্ট</span>
+          <span id="recentPrintsBadge" class="hidden px-1.5 py-0.2 bg-pink-600 text-white rounded-full text-[10px] font-extrabold">০</span>
+        </button>
+        <div class="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-semibold">
+          <span class="w-2 h-2 rounded-full bg-green-500 pulse-dot"></span>
+          <span>সক্রিয়</span>
+        </div>
       </div>
     </div>
   </header>
 
   <main class="max-w-lg mx-auto px-4 py-4 space-y-4">
+
+    <!-- Recent Prints & Live Status Bar (Top of Customer Panel) -->
+    <div id="recentPrintsPanel" class="hidden bg-white rounded-2xl border border-pink-200 shadow-sm overflow-hidden">
+      <div class="px-4 py-2.5 bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-base">📋</span>
+          <div>
+            <h2 class="font-bold text-xs sm:text-sm text-gray-900">আমার সাম্প্রতিক প্রিন্ট ও বর্তমান অবস্থা</h2>
+            <p class="text-[10px] text-gray-500">যে কোনো অর্ডারে ক্লিক করে লাইভ স্ট্যাটাস দেখুন</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button type="button" id="btnRefreshRecentPrints" class="px-2 py-1 bg-white hover:bg-gray-100 text-gray-700 border rounded-lg text-[11px] font-bold transition" title="স্ট্যাটাস রিফ্রেশ করুন">
+            🔄 রিফ্রেশ
+          </button>
+          <button type="button" id="btnCloseRecentPrints" class="text-gray-400 hover:text-gray-700 px-1.5 text-lg font-bold leading-none" title="বন্ধ করুন">&times;</button>
+        </div>
+      </div>
+      <div id="recentPrintsList" class="divide-y divide-gray-100 max-h-64 overflow-y-auto p-2 space-y-1.5">
+        <p class="text-xs text-gray-400 text-center py-4">এখনো কোনো প্রিন্ট অর্ডার পাঠানো হয়নি।</p>
+      </div>
+    </div>
 
     <!-- Mode Switcher: Document / NID / Photo studio / File transfer -->
     <div class="bg-white p-1.5 rounded-2xl border border-gray-200 shadow-sm grid grid-cols-2 sm:grid-cols-4 gap-1">
@@ -140,16 +169,34 @@
       <div id="docInlinePreview" class="hidden mt-3 space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="font-bold text-gray-700 flex items-center gap-1.5">
-            <span>👁️</span> <span id="docInlineTitle">সিলেক্ট করা ছবির লাইভ প্রিভিউ</span>
+            <span>👁️</span> <span id="docInlineTitle">সিলেক্ট করা ফাইলের লাইভ প্রিভিউ</span>
           </span>
           <span id="docInlineModeBadge" class="text-[10px] bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full font-bold">সাদাকালো (B&W) • Portrait</span>
         </div>
-        <div class="bg-slate-200/80 rounded-xl p-3 border flex flex-col items-center justify-center">
+        <div class="bg-slate-200/80 rounded-xl p-3 border flex flex-col items-center justify-center relative">
+          <div id="docInlineLoading" class="hidden absolute inset-0 bg-white/60 backdrop-blur-[1px] z-10 flex items-center justify-center rounded-xl text-xs font-bold text-pink-600">
+            ⏳ পাতা লোড হচ্ছে...
+          </div>
           <!-- Visual A4 Paper Frame that changes shape between Portrait (210:297) and Landscape (297:210) -->
           <div id="docPaperSheet" class="w-[220px] sm:w-[250px] aspect-[210/297] bg-white rounded shadow-md border border-gray-300 p-2.5 flex items-center justify-center transition-all duration-300 overflow-hidden">
             <img id="docInlineImg" src="" alt="Selected photo live preview" class="max-w-full max-h-full object-contain transition-all duration-200">
           </div>
           <p id="docPaperOrientNote" class="text-[10px] font-bold text-gray-600 mt-1.5">📱 A4 লম্বালম্বি (Portrait) পেজ লেআউট</p>
+        </div>
+        <!-- Multi-page navigation bar for multi-page PDFs -->
+        <div id="docInlinePageNav" class="hidden bg-white border border-pink-200 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs shadow-sm">
+          <button type="button" id="btnDocPrevPage" class="px-2.5 py-1 bg-gray-100 hover:bg-pink-50 hover:text-pink-700 text-gray-700 rounded-lg font-bold transition disabled:opacity-40">
+            ◀ আগের পাতা
+          </button>
+          <div class="flex items-center gap-1.5 font-bold text-gray-800">
+            <span>পাতা:</span>
+            <select id="docInlinePageSelect" class="px-2 py-0.5 border border-pink-300 rounded-lg bg-pink-50/50 text-pink-700 font-bold text-xs focus:outline-none">
+              <option value="1">১ / ১</option>
+            </select>
+          </div>
+          <button type="button" id="btnDocNextPage" class="px-2.5 py-1 bg-gray-100 hover:bg-pink-50 hover:text-pink-700 text-gray-700 rounded-lg font-bold transition disabled:opacity-40">
+            পরের পাতা ▶
+          </button>
         </div>
       </div>
 
@@ -626,7 +673,10 @@
 
     <!-- Live Order Tracker Modal -->
     <div id="trackerOverlay" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-      <div class="bg-white max-w-sm w-full rounded-2xl p-6 text-center shadow-2xl space-y-5">
+      <div class="bg-white max-w-sm w-full rounded-2xl p-6 text-center shadow-2xl space-y-4 relative">
+        <button type="button" id="btnCloseTrackerTop" class="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900 flex items-center justify-center text-lg font-bold transition" title="পেছনে যান">
+          &times;
+        </button>
         <div class="w-16 h-16 mx-auto rounded-full bg-pink-50 border border-pink-200 flex items-center justify-center text-3xl" id="statusIcon">
           ⏳
         </div>
@@ -654,14 +704,21 @@
           </div>
           <div class="flex items-center gap-2" id="step4">
             <span class="w-4 h-4 rounded-full bg-gray-300 text-white flex items-center justify-center text-[10px]" id="step4Dot">4</span>
-            <span id="step4Text">প্রিন্ট সম্পন্ন ও ফাইল নিরাপদ ডিলিট</span>
+            <span id="step4Text">প্রিন্ট সম্পন্ন</span>
           </div>
         </div>
 
-        <div id="trackerActionBtn" class="hidden">
-          <button onclick="location.reload()" class="w-full py-2.5 bg-gray-900 text-white text-sm font-bold rounded-xl hover:bg-black transition">
-            নতুন ফাইল প্রিন্ট করুন
-          </button>
+        <!-- Always-visible navigation actions so customer is never stuck waiting -->
+        <div id="trackerActionBtn" class="pt-1 space-y-2">
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" id="btnTrackerGoBack" class="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-bold rounded-xl transition">
+              ← পেছনে যান
+            </button>
+            <button type="button" id="btnTrackerNewPrint" class="w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white text-xs font-bold rounded-xl shadow transition">
+              ➕ নতুন প্রিন্ট করুন
+            </button>
+          </div>
+          <p class="text-[10px] text-gray-400">পেছনে গেলেও আপনার অর্ডার চালু থাকবে। উপরের <b>"সাম্প্রতিক প্রিন্ট"</b> থেকে যেকোনো সময় অবস্থা দেখতে পারবেন।</p>
         </div>
       </div>
     </div>
@@ -864,6 +921,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102404"></script>
+  <script src="/static/customer_print.js?v=2026102405"></script>
 </body>
 </html>

@@ -1486,6 +1486,32 @@ async def customer_submit_payment(order_id: str, request: Request):
     
     return {"success": True, "message": msg}
 
+
+@app.get("/api/orders/status")
+async def customer_get_orders_status(ids: str = ""):
+    """Returns live status and metadata for a comma-separated list of recent customer order IDs."""
+    raw_ids = [oid.strip() for oid in (ids or "").split(",") if oid.strip()][:20]
+    if not raw_ids:
+        return {"orders": []}
+    result = []
+    for oid in raw_ids:
+        o = db.get_order(oid)
+        if o:
+            result.append({
+                "id": o["id"],
+                "shop_id": o["shop_id"],
+                "original_filename": o.get("original_filename") or "document",
+                "page_count": o.get("page_count") or 1,
+                "copies": o.get("copies") or 1,
+                "color_mode": o.get("color_mode") or "bw",
+                "paper_size": o.get("paper_size") or "A4",
+                "total_price": o.get("total_price") or 0,
+                "payment_method": o.get("payment_method") or "counter_cash",
+                "status": o.get("status") or "pending_payment",
+                "created_at": o.get("created_at") or "",
+            })
+    return {"orders": result}
+
 # ── AGENT (WINDOWS DESKTOP) ENDPOINTS ──
 
 @app.get("/download/{order_id}")

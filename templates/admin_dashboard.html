@@ -503,7 +503,10 @@
           <!-- Multi-page navigation for PDFs -->
           <div id="editPageNav" class="hidden w-full flex items-center justify-between bg-white px-3 py-1.5 rounded-xl border text-xs">
             <button type="button" onclick="stepEditPreviewPage(-1)" class="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 rounded font-bold">◀ আগের পাতা</button>
-            <span id="editPageIndicator" class="font-bold text-gray-700">পাতা ১ / ১</span>
+            <div class="flex items-center gap-1.5 font-bold text-gray-700">
+              <span id="editPageIndicator">পাতা:</span>
+              <select id="editPageSelect" onchange="jumpEditPreviewPage(this.value)" class="px-2 py-0.5 border border-pink-300 rounded bg-pink-50/50 text-pink-700 font-bold text-xs"></select>
+            </div>
             <button type="button" onclick="stepEditPreviewPage(1)" class="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 rounded font-bold">পরের পাতা ▶</button>
           </div>
         </div>
@@ -770,6 +773,13 @@
       refreshAdminEditPreview();
     }
 
+    function jumpEditPreviewPage(pageVal) {
+      if (!currentEditingOrder) return;
+      const maxP = Math.max(1, parseInt(currentEditingOrder.page_count || 1, 10));
+      editPreviewPage = Math.max(1, Math.min(maxP, parseInt(pageVal, 10) || 1));
+      refreshAdminEditPreview();
+    }
+
     function refreshAdminEditPreview() {
       if (!currentEditingOrderId) return;
       const color = document.getElementById('editColorMode').value || 'bw';
@@ -813,7 +823,19 @@
       const nav = document.getElementById('editPageNav');
       if (nav) {
         nav.classList.toggle('hidden', maxP <= 1);
-        document.getElementById('editPageIndicator').innerText = `পাতা ${editPreviewPage} / ${maxP}`;
+        const sel = document.getElementById('editPageSelect');
+        if (sel) {
+          if (sel.options.length !== maxP) {
+            sel.innerHTML = '';
+            for (let p = 1; p <= maxP; p++) {
+              const opt = document.createElement('option');
+              opt.value = String(p);
+              opt.textContent = `${p} / ${maxP}`;
+              sel.appendChild(opt);
+            }
+          }
+          sel.value = String(editPreviewPage);
+        }
       }
 
       if (img && loader) {

@@ -74,11 +74,14 @@
   const btnMergeNid = $('btnMergeNid');
 
   const STORAGE_KEY = 'qsp_state_' + (typeof SHOP_CODE !== 'undefined' ? SHOP_CODE : 'default');
+  const RECENT_ORDERS_KEY = 'qsp_recent_orders_' + (typeof SHOP_CODE !== 'undefined' ? SHOP_CODE : 'default');
   let fileRev = 1;
   let instantLocalUrl = null;
+  let docInlinePage = 1;
 
   function bumpFileRev() {
     fileRev++;
+    docInlinePage = 1;
     if (instantLocalUrl) {
       URL.revokeObjectURL(instantLocalUrl);
       instantLocalUrl = null;
@@ -184,6 +187,11 @@
     docPrev.classList.remove('hidden');
 
     const img = $('docInlineImg');
+    const loader = $('docInlineLoading');
+    const pageNav = $('docInlinePageNav');
+    const pageSel = $('docInlinePageSelect');
+    const btnPrev = $('btnDocPrevPage');
+    const btnNext = $('btnDocNextPage');
     const badge = $('docInlineModeBadge');
     const sheet = $('docPaperSheet');
     const orientNote = $('docPaperOrientNote');
@@ -218,6 +226,8 @@
 
     if (img) {
       if (uploadedFile.file_type === 'image') {
+        if (pageNav) pageNav.classList.add('hidden');
+        if (loader) loader.classList.add('hidden');
         img.style.filter = isBw ? 'grayscale(100%)' : 'none';
         const revKey = `${uploadedFile.file_id}_${fileRev}`;
         if (forceReloadImg || img.dataset.revKey !== revKey) {
@@ -225,15 +235,68 @@
           img.src = instantLocalUrl || `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=900&v=${fileRev}`;
         }
       } else {
+        const nup = parseInt(checked('pages_per_sheet') || '1', 10);
+        const totalSheets = Math.max(1, Math.ceil((uploadedFile.page_count || 1) / nup));
+        if (docInlinePage > totalSheets) docInlinePage = totalSheets;
+        if (docInlinePage < 1) docInlinePage = 1;
+
+        if (pageNav) {
+          pageNav.classList.toggle('hidden', totalSheets <= 1);
+          if (pageSel) {
+            if (pageSel.options.length !== totalSheets) {
+              pageSel.innerHTML = '';
+              for (let p = 1; p <= totalSheets; p++) {
+                const opt = document.createElement('option');
+                opt.value = String(p);
+                opt.textContent = `${bn(p)} / ${bn(totalSheets)}`;
+                pageSel.appendChild(opt);
+              }
+            }
+            pageSel.value = String(docInlinePage);
+          }
+          if (btnPrev) btnPrev.disabled = docInlinePage <= 1;
+          if (btnNext) btnNext.disabled = docInlinePage >= totalSheets;
+        }
+
         const colorParam = isBw ? 'bw' : 'color';
-        const pdfKey = `${uploadedFile.file_id}_${fileRev}_${colorParam}_${orient}`;
+        const pdfKey = `${uploadedFile.file_id}_${fileRev}_${colorParam}_${orient}_p${docInlinePage}_n${nup}`;
         img.style.filter = 'none';
         if (forceReloadImg || img.dataset.revKey !== pdfKey) {
           img.dataset.revKey = pdfKey;
-          img.src = `/api/preview-page/${encodeURIComponent(uploadedFile.file_id)}?page=1&color=${colorParam}&orientation=${orient}&v=${fileRev}`;
+          if (loader) loader.classList.remove('hidden');
+          img.onload = () => { if (loader) loader.classList.add('hidden'); };
+          img.onerror = () => { if (loader) loader.classList.add('hidden'); };
+          img.src = `/api/preview-page/${encodeURIComponent(uploadedFile.file_id)}?page=${docInlinePage}&nup=${nup}&color=${colorParam}&orientation=${orient}&v=${fileRev}`;
         }
       }
     }
+  }
+
+  // Wire multi-page controls in #docInlinePreview
+  if ($('btnDocPrevPage')) {
+    $('btnDocPrevPage').addEventListener('click', () => {
+      if (docInlinePage > 1) {
+        docInlinePage--;
+        refreshTopLivePreview();
+      }
+    });
+  }
+  if ($('btnDocNextPage')) {
+    $('btnDocNextPage').addEventListener('click', () => {
+      if (!uploadedFile) return;
+      const nup = parseInt(checked('pages_per_sheet') || '1', 10);
+      const totalSheets = Math.max(1, Math.ceil((uploadedFile.page_count || 1) / nup));
+      if (docInlinePage < totalSheets) {
+        docInlinePage++;
+        refreshTopLivePreview();
+      }
+    });
+  }
+  if ($('docInlinePageSelect')) {
+    $('docInlinePageSelect').addEventListener('change', (e) => {
+      docInlinePage = parseInt(e.target.value, 10) || 1;
+      refreshTopLivePreview();
+    });
   }
 
   // ── mode switching ───────────────────────────────────────────────────────
@@ -498,7 +561,7 @@
     nupWrapper.style.display = isPhoto ? 'none' : '';
     calculateBill();
   });
-  setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], calculateBill);
+  setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], () => { docInlinePage = 1; calculateBill(); refreshTopLivePreview(); });
   setupRadioGroup(['optBw', 'optColor'], () => { calculateBill(); refreshTopLivePreview(); });
   setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
   setupRadioGroup(['optPortrait', 'optLandscape'], () => { calculateBill(); refreshTopLivePreview(); });
@@ -817,7 +880,24 @@
           `শিট ${bn(i)} / ${bn(info.sheets)}`
         );
       }
-      if (info.sheets > shown) noteEl.innerText = `প্রথম ${bn(shown)} টি শিট দেখানো হয়েছে (মোট ${bn(info.sheets)} টি)।`;
+      if (info.sheets > shown) {
+        noteEl.innerText = `প্রথম ${bn(shown)} টি শিট দেখানো হয়েছে (মোট ${bn(info.sheets)} টি)।`;
+        const btnLoadAll = document.createElement('button');
+        btnLoadAll.type = 'button';
+        btnLoadAll.className = 'w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white text-xs font-bold rounded-xl shadow transition';
+        btnLoadAll.innerText = `📄 বাকি সবগুলো পাতা দেখুন (${bn(shown + 1)} থেকে ${bn(info.sheets)} পর্যন্ত)`;
+        btnLoadAll.addEventListener('click', () => {
+          btnLoadAll.remove();
+          for (let j = shown + 1; j <= info.sheets; j++) {
+            addPreviewImage(
+              `/api/preview-page/${uploadedFile.file_id}?page=${j}&nup=${nup}&color=${color}&orientation=${orient}&t=${Date.now()}`,
+              `শিট ${bn(j)} / ${bn(info.sheets)}`
+            );
+          }
+          noteEl.innerText = `সবগুলো (${bn(info.sheets)} টি) শিট দেখানো হচ্ছে।`;
+        });
+        pagesBox.appendChild(btnLoadAll);
+      }
     } catch (err) {
       // fallback: browser's own PDF viewer
       loadingEl.classList.add('hidden');
@@ -848,6 +928,221 @@
     setTimeout(() => btn.classList.remove('ring-4', 'ring-pink-300'), 1500);
   });
 
+  // ── RECENT ORDERS & LIVE TRACKER ─────────────────────────────────────────
+  let activeTrackerOrderId = null;
+  const orderSockets = {};
+
+  function loadRecentOrders() {
+    try {
+      const raw = localStorage.getItem(RECENT_ORDERS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveRecentOrders(list) {
+    try {
+      localStorage.setItem(RECENT_ORDERS_KEY, JSON.stringify((list || []).slice(0, 15)));
+    } catch (e) {}
+  }
+
+  function recordRecentOrder(orderObj) {
+    const list = loadRecentOrders().filter((x) => x && x.id !== orderObj.id);
+    list.unshift(orderObj);
+    saveRecentOrders(list);
+    renderRecentOrdersPanel();
+    ensureOrderSocket(orderObj.id);
+  }
+
+  function updateRecentOrderStatus(orderId, status, message) {
+    const list = loadRecentOrders();
+    let changed = false;
+    list.forEach((item) => {
+      if (item && item.id === orderId) {
+        if (status && item.status !== status) {
+          item.status = status;
+          changed = true;
+        }
+        if (message) {
+          item.message = message;
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      saveRecentOrders(list);
+    }
+    renderRecentOrdersPanel();
+    if (activeTrackerOrderId === orderId) {
+      applyStatusToTrackerModal(status, message);
+    }
+  }
+
+  function getStatusMeta(status) {
+    if (status === 'paid') {
+      return {
+        badge: '💳 পেইড / প্রিন্টের অপেক্ষায়',
+        cls: 'bg-blue-100 text-blue-800 border-blue-200',
+        defaultMsg: 'পেমেন্ট গৃহীত হয়েছে। দোকানদার প্রিন্ট শুরু করছেন...'
+      };
+    }
+    if (status === 'printing') {
+      return {
+        badge: '⚡ প্রিন্ট হচ্ছে...',
+        cls: 'bg-pink-100 text-pink-700 border-pink-200 animate-pulse',
+        defaultMsg: 'প্রিন্টারে আপনার ফাইলটি প্রিন্ট হচ্ছে...'
+      };
+    }
+    if (status === 'completed') {
+      return {
+        badge: '✓ প্রিন্ট সম্পন্ন',
+        cls: 'bg-green-100 text-green-800 border-green-200',
+        defaultMsg: 'আপনার প্রিন্ট সফলভাবে সম্পন্ন হয়েছে! কাউন্টার থেকে কাগজ সংগ্রহ করুন।'
+      };
+    }
+    if (status === 'cancelled') {
+      return {
+        badge: '❌ বাতিল',
+        cls: 'bg-red-100 text-red-700 border-red-200',
+        defaultMsg: 'এই প্রিন্ট অর্ডারটি বাতিল করা হয়েছে।'
+      };
+    }
+    return {
+      badge: '⏳ পেমেন্ট অপেক্ষমাণ',
+      cls: 'bg-amber-100 text-amber-800 border-amber-200',
+      defaultMsg: 'কাউন্টার থেকে পেমেন্ট ও অর্ডার নিশ্চিত করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন...'
+    };
+  }
+
+  function renderRecentOrdersPanel() {
+    const list = loadRecentOrders();
+    const badge = $('recentPrintsBadge');
+    const box = $('recentPrintsList');
+    if (badge) {
+      if (list.length > 0) {
+        badge.innerText = bn(list.length);
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+      }
+    }
+    if (!box) return;
+    if (list.length === 0) {
+      box.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">এখনো কোনো প্রিন্ট অর্ডার পাঠানো হয়নি।</p>';
+      return;
+    }
+    box.innerHTML = '';
+    list.forEach((item) => {
+      const meta = getStatusMeta(item.status);
+      const row = document.createElement('div');
+      row.className = 'p-2.5 rounded-xl bg-gray-50 hover:bg-pink-50/40 border border-gray-200/80 flex items-center justify-between gap-2 cursor-pointer transition';
+      row.innerHTML = `
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-1.5">
+            <span class="font-bold text-xs text-gray-800 truncate">${item.original_filename || 'ডকুমেন্ট'}</span>
+            <span class="text-[10px] font-mono text-gray-400 shrink-0">#${item.id}</span>
+          </div>
+          <div class="text-[11px] text-gray-500 mt-0.5 flex items-center gap-2 flex-wrap">
+            <span>${bn(item.copies || 1)} কপি</span>
+            <span>•</span>
+            <span class="font-bold text-pink-600">৳ ${Number(item.total_price || 0).toFixed(0)}</span>
+            ${item.created_at ? `<span>• ${item.created_at}</span>` : ''}
+          </div>
+        </div>
+        <div class="flex flex-col items-end gap-1 shrink-0">
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold border ${meta.cls}">${meta.badge}</span>
+          <span class="text-[10px] text-pink-600 font-bold underline">বিস্তারিত দেখুন ➔</span>
+        </div>
+      `;
+      row.addEventListener('click', () => {
+        openTracker(item.id);
+      });
+      box.appendChild(row);
+    });
+  }
+
+  async function syncRecentOrdersStatus() {
+    const list = loadRecentOrders();
+    if (!list.length) {
+      renderRecentOrdersPanel();
+      return;
+    }
+    const ids = list.map((x) => x.id).filter(Boolean).join(',');
+    try {
+      const res = await fetch(`/api/orders/status?ids=${encodeURIComponent(ids)}&t=${Date.now()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.orders)) {
+        const map = {};
+        data.orders.forEach((o) => { map[o.id] = o; });
+        list.forEach((item) => {
+          const srv = map[item.id];
+          if (srv) {
+            item.status = srv.status;
+            item.original_filename = srv.original_filename || item.original_filename;
+            item.copies = srv.copies || item.copies;
+            item.total_price = srv.total_price !== undefined ? srv.total_price : item.total_price;
+          }
+        });
+        saveRecentOrders(list);
+        renderRecentOrdersPanel();
+        if (activeTrackerOrderId && map[activeTrackerOrderId]) {
+          applyStatusToTrackerModal(map[activeTrackerOrderId].status, null);
+        }
+      }
+    } catch (e) {}
+    // Ensure active orders have live WebSockets connected
+    list.forEach((item) => {
+      if (item && item.id && item.status !== 'completed' && item.status !== 'cancelled') {
+        ensureOrderSocket(item.id);
+      }
+    });
+  }
+
+  function ensureOrderSocket(orderId) {
+    if (!orderId || orderSockets[orderId]) return;
+    try {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const sock = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
+      orderSockets[orderId] = sock;
+      sock.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.event === 'STATUS_CHANGE') {
+            updateRecentOrderStatus(orderId, msg.status, msg.message);
+          }
+        } catch (e) {}
+      };
+      sock.onclose = () => {
+        delete orderSockets[orderId];
+      };
+    } catch (e) {}
+  }
+
+  if ($('btnToggleRecentPrints')) {
+    $('btnToggleRecentPrints').addEventListener('click', () => {
+      const panel = $('recentPrintsPanel');
+      if (!panel) return;
+      const isHidden = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !isHidden);
+      if (isHidden) {
+        syncRecentOrdersStatus();
+      }
+    });
+  }
+  if ($('btnCloseRecentPrints')) {
+    $('btnCloseRecentPrints').addEventListener('click', () => {
+      if ($('recentPrintsPanel')) $('recentPrintsPanel').classList.add('hidden');
+    });
+  }
+  if ($('btnRefreshRecentPrints')) {
+    $('btnRefreshRecentPrints').addEventListener('click', () => {
+      syncRecentOrdersStatus();
+    });
+  }
+
   // ── PLACE ORDER ──────────────────────────────────────────────────────────
   $('btnConfirmOrder').addEventListener('click', async () => {
     if (!uploadedFile) { alert('অনুগ্রহ করে ফাইল বা ছবি আপলোড করুন।'); return; }
@@ -860,7 +1155,11 @@
 
     const isNid = !!uploadedFile.is_nid;
     const btn = $('btnConfirmOrder');
+    const origBtnHtml = btn.innerHTML;
     btn.disabled = true;
+    btn.classList.add('opacity-80', 'cursor-wait');
+    btn.innerHTML = '<span class="inline-block animate-spin mr-1.5">⏳</span> <span>প্রিন্টের জন্য পাঠানো হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</span>';
+
     const payload = {
       shop_id: SHOP_ID,
       file_id: uploadedFile.file_id,
@@ -890,29 +1189,44 @@
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (data.success) openTracker(data.order_id);
-      else alert(data.detail || 'অর্ডার তৈরিতে সমস্যা হয়েছে।');
+      if (data.success) {
+        recordRecentOrder({
+          id: data.order_id,
+          original_filename: uploadedFile.original_filename,
+          copies: payload.copies,
+          total_price: data.total_price,
+          status: 'pending_payment',
+          created_at: new Date().toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })
+        });
+        openTracker(data.order_id);
+      } else {
+        alert(data.detail || 'অর্ডার তৈরিতে সমস্যা হয়েছে।');
+      }
     } catch (err) {
       alert('সার্ভারে সংযোগ পাওয়া যায়নি।');
     } finally {
       btn.disabled = false;
+      btn.classList.remove('opacity-80', 'cursor-wait');
+      btn.innerHTML = origBtnHtml;
     }
   });
 
-  function openTracker(orderId) {
-    $('trackerOverlay').classList.remove('hidden');
-    $('statusOrderId').innerText = `Order ID: #${orderId}`;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const sock = new WebSocket(`${proto}//${location.host}/ws/order/${orderId}`);
-    sock.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.event === 'STATUS_CHANGE') handleStatusUpdate(msg.status, msg.message);
-    };
+  const DOT_DONE = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
+  const DOT_IDLE = 'w-4 h-4 rounded-full bg-gray-300 text-white flex items-center justify-center text-[10px]';
+
+  function resetTrackerDots() {
+    if ($('step2Dot')) { $('step2Dot').className = DOT_IDLE; $('step2Dot').innerText = '2'; }
+    if ($('step3Dot')) { $('step3Dot').className = DOT_IDLE; $('step3Dot').innerText = '3'; }
+    if ($('step4Dot')) { $('step4Dot').className = DOT_IDLE; $('step4Dot').innerText = '4'; }
+    if ($('statusIcon')) $('statusIcon').innerText = '⏳';
+    if ($('statusTitle')) $('statusTitle').innerText = 'অর্ডার গ্রহণ করা হয়েছে';
+    if ($('statusMessage')) $('statusMessage').innerText = 'কাউন্টার থেকে পেমেন্ট নিশ্চিত করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন...';
   }
 
-  const DOT_DONE = 'w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px]';
-  function handleStatusUpdate(status, message) {
-    $('statusMessage').innerText = message;
+  function applyStatusToTrackerModal(status, message) {
+    resetTrackerDots();
+    const meta = getStatusMeta(status);
+    if ($('statusMessage')) $('statusMessage').innerText = message || meta.defaultMsg;
     if (status === 'paid') {
       $('step2Dot').className = DOT_DONE; $('step2Dot').innerText = '✓';
       $('statusIcon').innerText = '🖨️'; $('statusTitle').innerText = 'পেমেন্ট সম্পন্ন';
@@ -923,12 +1237,43 @@
     } else if (status === 'completed') {
       ['step2Dot', 'step3Dot', 'step4Dot'].forEach((d) => { $(d).className = DOT_DONE; $(d).innerText = '✓'; });
       $('statusIcon').innerText = '🎉'; $('statusTitle').innerText = 'প্রিন্ট সম্পন্ন!';
-      $('trackerActionBtn').classList.remove('hidden');
     } else if (status === 'cancelled') {
       $('statusIcon').innerText = '❌'; $('statusTitle').innerText = 'অর্ডার বাতিল';
-      $('trackerActionBtn').classList.remove('hidden');
     }
   }
+
+  function openTracker(orderId) {
+    activeTrackerOrderId = orderId;
+    $('trackerOverlay').classList.remove('hidden');
+    $('statusOrderId').innerText = `Order ID: #${orderId}`;
+    const existing = loadRecentOrders().find((x) => x && x.id === orderId);
+    applyStatusToTrackerModal(existing ? existing.status : 'pending_payment', existing ? existing.message : null);
+    ensureOrderSocket(orderId);
+    syncRecentOrdersStatus();
+  }
+
+  function closeTrackerOverlay() {
+    $('trackerOverlay').classList.add('hidden');
+    if ($('recentPrintsPanel')) {
+      $('recentPrintsPanel').classList.remove('hidden');
+    }
+    renderRecentOrdersPanel();
+  }
+
+  function startNewPrintFromTracker() {
+    $('trackerOverlay').classList.add('hidden');
+    resetUploads(true);
+    (currentMode === 'nid' ? dropzoneNid : dropzoneNormal).classList.remove('hidden');
+    if ($('recentPrintsPanel')) {
+      $('recentPrintsPanel').classList.remove('hidden');
+    }
+    renderRecentOrdersPanel();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  if ($('btnCloseTrackerTop')) $('btnCloseTrackerTop').addEventListener('click', closeTrackerOverlay);
+  if ($('btnTrackerGoBack')) $('btnTrackerGoBack').addEventListener('click', closeTrackerOverlay);
+  if ($('btnTrackerNewPrint')) $('btnTrackerNewPrint').addEventListener('click', startNewPrintFromTracker);
 
   // ── FILE TRANSFER (customer -> shop) ─────────────────────────────────────
   let trFile = null;
@@ -1785,5 +2130,14 @@
 
   // Restore previously uploaded file across page refresh
   restoreSessionState();
+
+  // Initialize Recent Prints panel & live status sync on load
+  renderRecentOrdersPanel();
+  syncRecentOrdersStatus().then(() => {
+    const hasActive = loadRecentOrders().some((x) => x && (x.status === 'pending_payment' || x.status === 'paid' || x.status === 'printing'));
+    if (hasActive && $('recentPrintsPanel')) {
+      $('recentPrintsPanel').classList.remove('hidden');
+    }
+  });
 
 })();
