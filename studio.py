@@ -48,10 +48,18 @@ def sanitize_params(raw: Dict) -> Dict:
     if bg != "none" and not HEX_RE.match(str(bg)):
         bg = "none"
 
+    suit = str(raw.get("suit") or "none").strip()
+    if suit not in ("none", "suit1", "suit2", "suit3", "suit4"):
+        suit = "none"
+
+    camscan = str(raw.get("camscan") or "none").strip()
+    if camscan not in ("none", "magic_color", "bw_doc", "grayscale"):
+        camscan = "none"
+
     return {
         "paper": paper,
         "items": items,
-        "fill": bool(raw.get("fill")),                      # fill the page with the first size
+        "fill": bool(raw.get("fill")),
         "brightness": _num(raw.get("brightness"), -60, 60, 0),
         "contrast": _num(raw.get("contrast"), -60, 60, 0),
         "bw": bool(raw.get("bw")),
@@ -61,6 +69,11 @@ def sanitize_params(raw: Dict) -> Dict:
         "zoom": _num(raw.get("zoom"), 1.0, 3.0, 1.0),
         "ox": _num(raw.get("ox"), -1.0, 1.0, 0.0),
         "oy": _num(raw.get("oy"), -1.0, 1.0, 0.0),
+        "suit": suit,
+        "suit_zoom": _num(raw.get("suit_zoom"), 0.5, 2.0, 1.0),
+        "suit_ox": _num(raw.get("suit_ox"), -1.0, 1.0, 0.0),
+        "suit_oy": _num(raw.get("suit_oy"), -1.0, 1.0, 0.0),
+        "camscan": camscan,
     }
 
 
@@ -196,11 +209,31 @@ def render_sheet(src_path: str, params: Dict, dpi: int = 300) -> Tuple[Image.Ima
         if len(alt) >= len(placements):
             placements, page_w, page_h = alt, page_h, page_w
 
+    import image_fx
     # working photo: big enough for the largest frame at this DPI (even when zoomed)
     max_side = max(700, int(dpi * 8))
     photo = load_working(src_path, max_side)
+
+    # 1. CamScanner Document/Photo Enhancement if selected
+    if p.get("camscan") and p["camscan"] != "none":
+        photo = image_fx.camscanner_process(photo, mode=p["camscan"])
+
+    # 2. Advanced Remove.bg style Background Replacement
     if p["bg"] != "none":
-        photo = replace_background(photo, p["bg"], p["tol"])
+        rgba, mask = image_fx.advanced_remove_background(photo, p["tol"])
+        solid = Image.new("RGB", photo.size, p["bg"])
+        photo = Image.composite(photo, solid, mask)
+
+    # 3. Formal Suit / Dress Overlay
+    if p.get("suit") and p["suit"] != "none":
+        photo = image_fx.apply_dress_overlay(
+            photo, p["suit"],
+            suit_zoom=p.get("suit_zoom", 1.0),
+            suit_ox=p.get("suit_ox", 0.0),
+            suit_oy=p.get("suit_oy", 0.0)
+        )
+
+    # 4. Color, Brightness & Contrast adjustment
     photo = adjust(photo, p["brightness"], p["contrast"], p["bw"])
 
     sheet = Image.new("RGB", (mm(page_w), mm(page_h)), "white")

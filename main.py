@@ -727,6 +727,48 @@ def studio_preview(payload: dict = Body(...)):
                     headers={"X-Studio-Info": json.dumps(info), "Cache-Control": "no-store"})
 
 
+@app.post("/api/image/crop")
+async def crop_image_endpoint(payload: dict = Body(...)):
+    """Crops an uploaded image by normalized box [x, y, width, height] (0..1)."""
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be cropped")
+
+    box = payload.get("box", {})
+    x = max(0.0, min(1.0, float(box.get("x", 0))))
+    y = max(0.0, min(1.0, float(box.get("y", 0))))
+    w = max(0.05, min(1.0 - x, float(box.get("w", 1))))
+    h = max(0.05, min(1.0 - y, float(box.get("h", 1))))
+
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        iw, ih = im.size
+        crop_box = (int(x * iw), int(y * ih), int((x + w) * iw), int((y + h) * ih))
+        cropped = im.crop(crop_box)
+        cropped.save(src, "JPEG", quality=95)
+
+    return {"success": True, "file_id": file_id}
+
+
+@app.post("/api/image/camscan")
+async def camscan_image_endpoint(payload: dict = Body(...)):
+    """Applies CamScanner document flattening & clarity enhancement to an uploaded document/photo."""
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be scanned/enhanced")
+
+    mode = str(payload.get("mode", "magic_color")).strip()
+    import image_fx
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        enhanced = image_fx.camscanner_process(im, mode=mode)
+        enhanced.save(src, "JPEG", quality=95)
+
+    return {"success": True, "file_id": file_id}
+
+
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
     data = await request.json()

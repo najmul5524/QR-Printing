@@ -221,6 +221,11 @@
       ? 'NID কার্ড — A4 পেজে সামনে ও পেছনে (আসল মাপ ৮৫.৬×৫৪ মিমি)'
       : `মোট পেজ: ${bn(uploadedFile.page_count)} টি`;
     fileInfoBadge.classList.remove('hidden');
+    const isImg = uploadedFile.file_type === 'image';
+    const btnCrop = $('btnOpenCrop');
+    const btnCam = $('btnOpenCamScan');
+    if (btnCrop) btnCrop.classList.toggle('hidden', !isImg);
+    if (btnCam) btnCam.classList.toggle('hidden', !isImg);
 
     if (currentMode === 'studio') {
       studioCard.classList.remove('opacity-60', 'pointer-events-none');
@@ -364,6 +369,7 @@
   ];
   let studioItems = [{ preset: 'p4555', w: 45, h: 55, count: 6 }];
   let studioBg = 'none';
+  let studioSuit = 'none';
   let studioBlobUrl = null;
   let studioTimer = null;
   let studioInited = false;
@@ -432,7 +438,11 @@
       tol: +$('studioTol').value,
       zoom: +$('studioZoom').value / 100,
       ox: +$('studioOx').value / 100,
-      oy: +$('studioOy').value / 100
+      oy: +$('studioOy').value / 100,
+      suit: studioSuit,
+      suit_zoom: +($('suitZoom') ? $('suitZoom').value : 100) / 100,
+      suit_ox: +($('suitOx') ? $('suitOx').value : 0) / 100,
+      suit_oy: +($('suitOy') ? $('suitOy').value : 0) / 100
     };
   }
 
@@ -479,6 +489,29 @@
       renderStudioItems();
       ['studioBrightness', 'studioContrast', 'studioTol', 'studioZoom', 'studioOx', 'studioOy'].forEach((id) => $(id).addEventListener('input', scheduleStudio));
       ['studioPaper', 'studioBw', 'studioFill', 'studioBorder'].forEach((id) => $(id).addEventListener('change', scheduleStudio));
+      const suitPicker = $('suitPicker');
+      if (suitPicker) {
+        suitPicker.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-suit]');
+          if (!b) return;
+          studioSuit = b.dataset.suit;
+          document.querySelectorAll('.suit-btn').forEach(el => {
+            const on = el.dataset.suit === studioSuit;
+            el.classList.toggle('border-pink-600', on);
+            el.classList.toggle('bg-pink-50', on);
+            el.classList.toggle('border-gray-200', !on);
+            el.classList.toggle('bg-gray-50', !on);
+          });
+          const adj = $('suitAdjustWrap');
+          if (adj) adj.classList.toggle('hidden', studioSuit === 'none');
+          scheduleStudio();
+        });
+        ['suitZoom', 'suitOx', 'suitOy'].forEach(id => {
+          const el = $(id);
+          if (el) el.addEventListener('input', scheduleStudio);
+        });
+      }
+
       $('studioBgBtns').addEventListener('click', (e) => {
         const b = e.target.closest('[data-bg]');
         if (!b) return;
@@ -757,3 +790,99 @@
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
 })();
+
+  // ── Crop Modal Logic ──
+  window.openCropModal = function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('cropModal');
+    const target = $('cropImgTarget');
+    target.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
+    modal.classList.remove('hidden');
+  };
+  window.closeCropModal = function() {
+    const modal = $('cropModal');
+    if (modal) modal.classList.add('hidden');
+  };
+  window.setCropRatio = function(ratio) {
+    const box = $('cropBox');
+    if (ratio === 'square') {
+      box.style.width = '70%';
+      box.style.height = '70%';
+    } else if (ratio === 'passport') {
+      box.style.width = '60%';
+      box.style.height = '80%';
+    } else {
+      box.style.width = '85%';
+      box.style.height = '85%';
+    }
+  };
+  window.applyCrop = async function() {
+    if (!uploadedFile) return;
+    const box = $('cropBox');
+    const cont = $('cropContainer');
+    const img = $('cropImgTarget');
+
+    const iRect = img.getBoundingClientRect();
+    const bRect = box.getBoundingClientRect();
+
+    const nx = Math.max(0, (bRect.left - iRect.left) / iRect.width);
+    const ny = Math.max(0, (bRect.top - iRect.top) / iRect.height);
+    const nw = Math.min(1 - nx, bRect.width / iRect.width);
+    const nh = Math.min(1 - ny, bRect.height / iRect.height);
+
+    try {
+      const res = await fetch('/api/image/crop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          box: { x: nx, y: ny, w: nw, h: nh }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeCropModal();
+        if (currentMode === 'studio') scheduleStudio();
+        alert('ছবি সফলভাবে ক্রপ করা হয়েছে!');
+      }
+    } catch (e) {
+      alert('ক্রপ ব্যর্থ হয়েছে: ' + e);
+    }
+  };
+
+  // ── CamScanner Enhancer Logic ──
+  window.openCamscanModal = function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('camscanModal');
+    if (modal) modal.classList.remove('hidden');
+  };
+  window.closeCamscanModal = function() {
+    const modal = $('camscanModal');
+    if (modal) modal.classList.add('hidden');
+  };
+  window.applyCamscanEffect = async function(mode) {
+    if (!uploadedFile) return;
+    try {
+      const res = await fetch('/api/image/camscan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          mode: mode
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeCamscanModal();
+        if (currentMode === 'studio') scheduleStudio();
+        alert('CamScanner ইফেক্ট প্রয়োগ করা হয়েছে! প্রিন্ট কোয়ালিটি উন্নত হয়েছে।');
+      }
+    } catch (e) {
+      alert('স্ক্যানার ইফেক্ট প্রয়োগ ব্যর্থ হয়েছে: ' + e);
+    }
+  };
+
+  const btnCropTrigger = $('btnOpenCrop');
+  if (btnCropTrigger) btnCropTrigger.addEventListener('click', window.openCropModal);
+  const btnCamTrigger = $('btnOpenCamScan');
+  if (btnCamTrigger) btnCamTrigger.addEventListener('click', window.openCamscanModal);
