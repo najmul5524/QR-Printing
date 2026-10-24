@@ -93,6 +93,8 @@ def init_db():
         cursor.execute("ALTER TABLE shops ADD COLUMN rate_photo_a4 REAL DEFAULT 40.0")
     if "remove_bg_api_key" not in cols:
         cursor.execute("ALTER TABLE shops ADD COLUMN remove_bg_api_key TEXT DEFAULT ''")
+    if "file_retention_days" not in cols:
+        cursor.execute("ALTER TABLE shops ADD COLUMN file_retention_days REAL DEFAULT 1.0")
 
     # 4. File Transfers Table (customer -> shop inbox, shop -> customer share links)
     cursor.execute("""
@@ -201,6 +203,10 @@ def authenticate_shop(phone: str, password: str) -> Optional[Dict[str, Any]]:
 def update_shop_settings(shop_id: int, data: Dict[str, Any]):
     conn = get_db()
     cursor = conn.cursor()
+    try:
+        ret_days = max(0.02, min(30.0, float(data.get("file_retention_days", 1.0))))
+    except (TypeError, ValueError):
+        ret_days = 1.0
     cursor.execute("""
     UPDATE shops SET 
         name = ?,
@@ -214,7 +220,8 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         rate_color_double = ?,
         rate_photo_4x6 = ?,
         rate_photo_a4 = ?,
-        remove_bg_api_key = ?
+        remove_bg_api_key = ?,
+        file_retention_days = ?
     WHERE id = ?
     """, (
         data.get("name"),
@@ -229,6 +236,7 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         data.get("rate_photo_4x6", 30.0),
         data.get("rate_photo_a4", 40.0),
         data.get("remove_bg_api_key", ""),
+        ret_days,
         shop_id
     ))
     conn.commit()
@@ -313,17 +321,47 @@ def mark_order_file_purged(order_id: str):
     conn.commit()
     conn.close()
 
-def get_completed_orders_to_purge(cutoff_iso: str) -> List[Dict[str, Any]]:
-    """Returns completed orders whose printed_at timestamp is older than cutoff_iso and still have a file_path."""
+def delete_order_record(order_id: str, shop_id: int):
+    """Completely removes an order row from the database for the given shop."""
+    conn = get_db()
+    conn.execute("DELETE FROM orders WHERE id = ? AND shop_id = ?", (order_id, shop_id))
+    conn.commit()
+    conn.close()
+
+def get_shop_history_orders_with_files(shop_id: int) -> List[Dict[str, Any]]:
+    """Returns all completed/cancelled orders for a shop that still have a stored file_path."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, file_path FROM orders WHERE status = 'completed' AND file_path != '' AND printed_at IS NOT NULL AND printed_at < ?",
-        (cutoff_iso,)
+        "SELECT id, file_path FROM orders WHERE shop_id = ? AND status IN ('completed', 'cancelled') AND file_path != ''",
+        (shop_id,)
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
-def get_shop_orders(shop_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+def get_completed_orders_to_purge(now_ts: float) -> List[Dict[str, Any]]:
+    """Returns completed orders whose printed_at timestamp has exceeded their shop's file_retention_days."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT o.id, o.file_path, o.printed_at, COALESCE(s.file_retention_days, 1.0) AS retention_days
+        FROM orders o
+        LEFT JOIN shops s ON o.shop_id = s.id
+        WHERE o.status = 'completed' AND o.file_path != '' AND o.printed_at IS NOT NULL
+    """).fetchall()
+    conn.close()
+    expired = []
+    for r in rows:
+        d = dict(r)
+        try:
+            dt = datetime.fromisoformat(str(d["printed_at"]).replace("Z", "+00:00"))
+            age_sec = now_ts - dt.timestamp()
+            max_sec = float(d.get("retention_days") or 1.0) * 86400.0
+            if age_sec >= max_sec:
+                expired.append(d)
+        except Exception:
+            pass
+    return expired
+
+def get_shop_orders(shop_id: int, limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM orders WHERE shop_id = ? ORDER BY created_at DESC LIMIT ?", (shop_id, limit))

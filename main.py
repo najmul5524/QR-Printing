@@ -109,9 +109,9 @@ def _now_iso() -> str:
 
 
 def run_cleanup():
-    """Removes expired transfers, completed print files older than 30 mins, and abandoned temp / upload files."""
-    cutoff_completed = (datetime.now(timezone.utc) - timedelta(minutes=COMPLETED_RETENTION_MINUTES)).isoformat(timespec="seconds")
-    for o in db.get_completed_orders_to_purge(cutoff_completed):
+    """Removes expired transfers, completed print files past their shop retention period, and abandoned temp files."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    for o in db.get_completed_orders_to_purge(now_ts):
         utils.secure_delete_file(o["file_path"])
         db.mark_order_file_purged(o["id"])
     for t in db.get_expired_transfers(_now_iso()):
@@ -339,7 +339,10 @@ async def admin_dashboard(request: Request):
     if not shop:
         return RedirectResponse(url="/login")
     
+    await asyncio.to_thread(run_cleanup)
     orders = db.get_shop_orders(shop["id"])
+    live_orders = [o for o in orders if o["status"] in ("pending_payment", "paid", "printing")]
+    history_orders = [o for o in orders if o["status"] in ("completed", "cancelled")]
     stats = db.get_shop_stats(shop["id"])
     printers = db.get_shop_printers(shop["id"])
     is_agent_online = len(manager.agent_connections.get(shop["id"], [])) > 0
@@ -350,6 +353,8 @@ async def admin_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="admin_dashboard.html", context={
         "shop": shop,
         "orders": orders,
+        "live_orders": live_orders,
+        "history_orders": history_orders,
         "stats": stats,
         "printers": printers,
         "is_agent_online": is_agent_online,
@@ -370,7 +375,8 @@ async def update_settings(
     rate_color_double: float = Form(18.0),
     rate_photo_4x6: float = Form(30.0),
     rate_photo_a4: float = Form(40.0),
-    remove_bg_api_key: str = Form("")
+    remove_bg_api_key: str = Form(""),
+    file_retention_days: float = Form(1.0)
 ):
     shop = get_current_shop(request)
     if not shop:
@@ -388,7 +394,8 @@ async def update_settings(
         "rate_color_double": rate_color_double,
         "rate_photo_4x6": rate_photo_4x6,
         "rate_photo_a4": rate_photo_a4,
-        "remove_bg_api_key": remove_bg_api_key.strip()
+        "remove_bg_api_key": remove_bg_api_key.strip(),
+        "file_retention_days": file_retention_days
     })
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -487,7 +494,7 @@ async def admin_complete_order(order_id: str, request: Request):
 
 @app.post("/admin/order/{order_id}/delete-file")
 async def admin_delete_order_file(order_id: str, request: Request):
-    """Immediately deletes the print file from local disk and Cloudflare R2 before the 30-min timer."""
+    """Immediately deletes the print file from local disk and Cloudflare R2 before the retention timer."""
     shop = get_current_shop(request)
     if not shop:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -500,6 +507,40 @@ async def admin_delete_order_file(order_id: str, request: Request):
     db.mark_order_file_purged(order_id)
     await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id})
     return {"success": True}
+
+
+@app.post("/admin/order/{order_id}/delete-record")
+async def admin_delete_order_record(order_id: str, request: Request):
+    """Deletes the print file (if any) AND removes the order row from the previous orders list."""
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    order = db.get_order(order_id)
+    if not order or order["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.get("file_path"):
+        utils.secure_delete_file(order["file_path"])
+    db.delete_order_record(order_id, shop["id"])
+    await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED", "order_id": order_id})
+    return {"success": True}
+
+
+@app.post("/admin/orders/purge-history-files")
+async def admin_purge_history_files(request: Request):
+    """Deletes all stored files of completed/cancelled orders for the current shop at once."""
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    rows = db.get_shop_history_orders_with_files(shop["id"])
+    count = 0
+    for r in rows:
+        if r.get("file_path"):
+            utils.secure_delete_file(r["file_path"])
+        db.mark_order_file_purged(r["id"])
+        count += 1
+    await manager.notify_admin(shop["id"], {"event": "ORDER_UPDATED"})
+    return {"success": True, "purged": count}
 
 
 @app.post("/admin/order/{order_id}/cancel")
