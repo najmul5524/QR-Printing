@@ -136,6 +136,19 @@
         </div>
       </div>
 
+      <!-- Always-On Top Live Preview for Selected Photo / Document -->
+      <div id="docInlinePreview" class="hidden mt-3 space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-bold text-gray-700 flex items-center gap-1.5">
+            <span>👁️</span> <span id="docInlineTitle">সিলেক্ট করা ছবির লাইভ প্রিভিউ</span>
+          </span>
+          <span class="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">লাইভ প্রিভিউ</span>
+        </div>
+        <div class="bg-gray-100 rounded-xl p-2 border flex items-center justify-center">
+          <img id="docInlineImg" src="" alt="Selected photo live preview" class="w-full max-h-[380px] object-contain rounded-lg bg-white shadow border transition-all duration-200">
+        </div>
+      </div>
+
       <!-- NID live preview (real A4 sheet, exact card size) -->
       <div id="nidInlinePreview" class="hidden mt-3 space-y-2">
         <div class="flex items-center justify-between text-xs">
@@ -629,14 +642,16 @@
     </div>
 
   
-    <!-- Individual Crop Modal (CamScanner 4-Corner Smart Perspective Crop + Normal Cropper.js) -->
+    <!-- Individual Crop Modal (CamScanner 4-Corner Smart Perspective Crop + Live Result Preview + OK) -->
     <div id="cropModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
       <div class="bg-white max-w-lg w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border">
         <div class="px-4 py-3 bg-gray-900 text-white flex items-center justify-between">
-          <h3 class="font-bold text-sm flex items-center gap-2"><span>📐</span> <span>স্মার্ট ক্রপ ও বাঁকা ছবি সোজা করুন (Smart Crop)</span></h3>
+          <h3 class="font-bold text-sm flex items-center gap-2"><span>📐</span> <span id="cropModalTitleText">স্মার্ট ক্রপ ও বাঁকা ছবি সোজা করুন (Smart Crop)</span></h3>
           <button type="button" onclick="closeCropModal()" class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
         </div>
-        <div class="p-3 space-y-2.5">
+
+        <!-- VIEW 1: 4-Corner / Box Selection Editor -->
+        <div id="cropEditorView" class="p-3 space-y-2.5">
           <!-- NID Front / Back Switcher (Shown only in NID Mode) -->
           <div id="nidCropSideSwitch" class="hidden grid grid-cols-2 gap-2 bg-gray-100 p-1 rounded-xl text-xs">
             <button type="button" id="btnCropSideFront" onclick="switchNidCropSide('front')" class="py-1.5 rounded-lg font-bold bg-pink-600 text-white shadow-sm">🪪 ১. সামনের পিঠ (Front)</button>
@@ -661,7 +676,7 @@
               <canvas id="smartLoupeCanvas" width="104" height="104" class="hidden absolute top-2.5 left-2.5 rounded-full border-2 border-emerald-400 shadow-2xl pointer-events-none z-20 bg-black"></canvas>
             </div>
             <p class="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1 text-center font-medium">
-              💡 ছবির <b>৪টি সবুজ কোণা</b> টেনে বাঁকা ডকুমেন্ট বা কার্ডের ৪ কোণায় বসান — এটি অটোমেটিক সোজা রেকট্যাঙ্গেল হয়ে যাবে!
+              💡 ছবির <b>৪টি সবুজ কোণা</b> টেনে বাঁকা ডকুমেন্ট বা কার্ডের ৪ কোণায় বসান এবং নিচে <b>"ক্রপ ও সোজা করুন"</b> চাপুন
             </p>
             <!-- Output Rectangle Shape Ratio for Smart Crop -->
             <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-center text-xs">
@@ -689,10 +704,36 @@
             </div>
           </div>
         </div>
-        <div class="p-3 bg-gray-50 border-t flex justify-end gap-2">
+
+        <!-- VIEW 2: Straightened / Cropped Live Result Inside Modal (Before clicking OK) -->
+        <div id="cropLiveResultView" class="hidden p-3.5 space-y-3">
+          <div class="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl px-3 py-2 text-xs font-bold flex items-center justify-between">
+            <span>✨ ছবিটি সোজা ও ক্রপ করা হয়েছে (লাইভ প্রিভিউ)</span>
+            <span class="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">প্রস্তুত</span>
+          </div>
+          <div class="relative bg-gray-950 rounded-xl overflow-hidden flex items-center justify-center h-[360px] max-h-[50vh] p-2 border border-gray-800">
+            <img id="cropResultPreviewImg" src="" alt="Straightened Live Result" class="max-h-full max-w-full object-contain rounded shadow-lg bg-white">
+          </div>
+          <p class="text-[11px] text-gray-600 text-center font-medium">
+            ছবিটি ঠিক থাকলে নিচে <b>"✓ ওকে (প্রিন্ট পেইজে যান)"</b> চাপুন, অথবা পুনরায় কোণা পরিবর্তন করতে <b>"↩️ আবার কোণা ঠিক করুন"</b> চাপুন।
+          </p>
+        </div>
+
+        <!-- Footer 1: Shown while selecting corners/box -->
+        <div id="cropFooterStep1" class="p-3 bg-gray-50 border-t flex justify-end gap-2">
           <button type="button" onclick="closeCropModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বাতিল</button>
-          <button type="button" id="btnSaveCrop" onclick="applyCrop()" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
-            <span>✓</span> <span>ক্রপ ও সোজা করুন</span>
+          <button type="button" id="btnPreviewCrop" onclick="previewCroppedImage()" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
+            <span>✂️</span> <span>ক্রপ ও সোজা করুন</span>
+          </button>
+        </div>
+
+        <!-- Footer 2: Shown when viewing straightened live preview inside modal -->
+        <div id="cropFooterStep2" class="hidden p-3 bg-gray-50 border-t flex items-center justify-between gap-2">
+          <button type="button" onclick="backToCropEditor()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold flex items-center gap-1">
+            <span>↩️</span> <span>আবার কোণা ঠিক করুন</span>
+          </button>
+          <button type="button" id="btnConfirmCropOk" onclick="confirmAndSaveCrop()" class="px-6 py-2.5 bg-gradient-to-r from-pink-600 to-orange-500 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow-lg flex items-center gap-1.5">
+            <span>✓</span> <span>ওকে (প্রিন্ট পেইজে যান)</span>
           </button>
         </div>
       </div>
@@ -798,6 +839,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102403"></script>
+  <script src="/static/customer_print.js?v=2026102404"></script>
 </body>
 </html>

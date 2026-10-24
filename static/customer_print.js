@@ -73,8 +73,98 @@
   const billSummaryText = $('billSummaryText');
   const btnMergeNid = $('btnMergeNid');
 
+  const STORAGE_KEY = 'qsp_state_' + (typeof SHOP_CODE !== 'undefined' ? SHOP_CODE : 'default');
+
+  function saveSessionState() {
+    try {
+      if (!uploadedFile) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        mode: currentMode,
+        uploadedFile: uploadedFile,
+        nidRot: nidRot
+      }));
+    } catch (e) { /* ignore storage quota errors */ }
+  }
+
+  async function restoreSessionState() {
+    if (location.hash === '#transfer') return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const state = JSON.parse(raw);
+      if (!state || !state.uploadedFile || !state.uploadedFile.file_id) return;
+
+      const res = await fetch(`/api/file/check/${encodeURIComponent(state.uploadedFile.file_id)}?t=${Date.now()}`);
+      if (!res.ok) return;
+      const check = await res.json();
+      if (!check.exists) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+
+      uploadedFile = state.uploadedFile;
+      nidRot = state.nidRot || { front: 0, back: 0 };
+      const targetMode = state.mode && state.mode !== 'transfer' ? state.mode : (uploadedFile.is_nid ? 'nid' : 'document');
+      setMode(targetMode, true);
+      showUploadedFile();
+    } catch (e) { /* ignore */ }
+  }
+
+  function refreshTopLivePreview() {
+    const docPrev = $('docInlinePreview');
+    const nidPrev = $('nidInlinePreview');
+    if (!uploadedFile) {
+      if (docPrev) docPrev.classList.add('hidden');
+      if (nidPrev) nidPrev.classList.add('hidden');
+      return;
+    }
+
+    if (uploadedFile.is_nid) {
+      if (docPrev) docPrev.classList.add('hidden');
+      if (nidPrev) nidPrev.classList.remove('hidden');
+      refreshNidInline();
+      return;
+    }
+
+    if (nidPrev) nidPrev.classList.add('hidden');
+    if (!docPrev) return;
+    docPrev.classList.remove('hidden');
+
+    const img = $('docInlineImg');
+    const badge = $('docInlineModeBadge');
+    const isBw = currentMode === 'studio'
+      ? ($('studioBw') && $('studioBw').value === '1')
+      : ((checked('color_mode') || 'bw') === 'bw');
+    const orient = checked('orientation') || 'portrait';
+
+    if (badge) {
+      if (currentMode === 'studio') {
+        badge.innerText = isBw ? 'ফটো স্টুডিও • সাদাকালো' : 'ফটো স্টুডিও • রঙিন';
+      } else {
+        const orientBn = orient === 'landscape' ? 'Landscape' : 'Portrait';
+        badge.innerText = `${isBw ? 'সাদাকালো (B&W)' : 'রঙিন (Color)'} • ${orientBn}`;
+      }
+      badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-bold ' +
+        (isBw ? 'bg-gray-200 text-gray-800' : 'bg-pink-100 text-pink-700');
+    }
+
+    if (img) {
+      if (uploadedFile.file_type === 'image') {
+        img.src = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?t=${Date.now()}`;
+        img.style.filter = isBw ? 'grayscale(100%)' : 'none';
+      } else {
+        const colorParam = isBw ? 'bw' : 'color';
+        img.src = `/api/preview-page/${encodeURIComponent(uploadedFile.file_id)}?page=1&color=${colorParam}&orientation=${orient}&t=${Date.now()}`;
+        img.style.filter = 'none';
+      }
+    }
+  }
+
   // ── mode switching ───────────────────────────────────────────────────────
-  function setMode(mode) {
+  function setMode(mode, keepFile = false) {
     currentMode = mode;
     Object.keys(tabs).forEach((k) => (tabs[k].className = k === mode ? ACTIVE_TAB : IDLE_TAB));
     const isTransfer = mode === 'transfer';
@@ -84,8 +174,6 @@
 
     const isNid = mode === 'nid';
     const isStudio = mode === 'studio';
-    dropzoneNormal.classList.toggle('hidden', isNid);
-    dropzoneNid.classList.toggle('hidden', !isNid);
     step1Title.innerText = isNid ? 'NID / ID কার্ডের ২ পিঠের ছবি দিন'
       : isStudio ? 'যে ছবিটি দিয়ে ফটো বানাবেন সেটি দিন' : 'ডকুমেন্ট বা ছবি সিলেক্ট করুন';
     fileInput.accept = isStudio ? 'image/png,image/jpeg,image/webp' : '.pdf,image/png,image/jpeg,image/webp';
@@ -95,18 +183,39 @@
     nidFitWrapper.classList.toggle('hidden', !isNid);
     settingsCard.classList.toggle('hidden', isStudio);
     studioCard.classList.toggle('hidden', !isStudio);
-    resetUploads();
+
+    // Preserve uploaded photo across document <-> studio switch or page refresh unless incompatible
+    const canKeep = keepFile || (
+      uploadedFile &&
+      !isNid &&
+      !uploadedFile.is_nid &&
+      (mode === 'document' || (mode === 'studio' && uploadedFile.file_type === 'image'))
+    );
+
+    if (canKeep && uploadedFile) {
+      dropzoneNormal.classList.add('hidden');
+      dropzoneNid.classList.add('hidden');
+      saveSessionState();
+      showUploadedFile();
+    } else {
+      dropzoneNormal.classList.toggle('hidden', isNid);
+      dropzoneNid.classList.toggle('hidden', !isNid);
+      resetUploads(false);
+    }
   }
   tabs.document.addEventListener('click', () => setMode('document'));
   tabs.nid.addEventListener('click', () => setMode('nid'));
   tabs.studio.addEventListener('click', () => setMode('studio'));
   tabs.transfer.addEventListener('click', () => setMode('transfer'));
 
-  function resetUploads() {
+  function resetUploads(clearStorage = true) {
     uploadedFile = null;
     nidFrontFile = null;
     nidBackFile = null;
     nidRot = { front: 0, back: 0 };
+    if (clearStorage) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    }
     fileInput.value = '';
     $('nidFrontInput').value = '';
     $('nidBackInput').value = '';
@@ -120,6 +229,7 @@
     btnMergeNid.className = 'w-full py-2.5 bg-gray-200 text-gray-500 font-bold text-xs rounded-xl transition cursor-not-allowed';
     fileInfoBadge.classList.add('hidden');
     $('nidInlinePreview').classList.add('hidden');
+    if ($('docInlinePreview')) $('docInlinePreview').classList.add('hidden');
     optPhoto.classList.remove('hidden');
     settingsCard.classList.add('opacity-60', 'pointer-events-none');
     studioCard.classList.add('opacity-60', 'pointer-events-none');
@@ -179,8 +289,8 @@
     clearTimeout(nidTimer);
     nidTimer = setTimeout(() => { $('nidInlineImg').src = nidPreviewUrl(800); }, 150);
   }
-  $('btnRotFront').addEventListener('click', () => { nidRot.front = (nidRot.front + 90) % 360; refreshNidInline(); });
-  $('btnRotBack').addEventListener('click', () => { nidRot.back = (nidRot.back + 90) % 360; refreshNidInline(); });
+  $('btnRotFront').addEventListener('click', () => { nidRot.front = (nidRot.front + 90) % 360; saveSessionState(); refreshNidInline(); });
+  $('btnRotBack').addEventListener('click', () => { nidRot.back = (nidRot.back + 90) % 360; saveSessionState(); refreshNidInline(); });
 
   // ── normal file upload ───────────────────────────────────────────────────
   dropzoneNormal.addEventListener('click', () => fileInput.click());
@@ -216,6 +326,9 @@
   }
 
   function showUploadedFile() {
+    saveSessionState();
+    dropzoneNormal.classList.add('hidden');
+    dropzoneNid.classList.add('hidden');
     $('fileNameText').innerText = uploadedFile.original_filename;
     $('fileMetaText').innerText = uploadedFile.is_nid
       ? 'NID কার্ড — A4 পেজে সামনে ও পেছনে (আসল মাপ ৮৫.৬×৫৪ মিমি)'
@@ -228,6 +341,8 @@
     if (btnCrop) btnCrop.classList.toggle('hidden', !isImg);
     if (btnCam) btnCam.classList.toggle('hidden', !isImg);
     if (btnRbg) btnRbg.classList.toggle('hidden', !isImg);
+
+    refreshTopLivePreview();
 
     if (currentMode === 'studio') {
       studioCard.classList.remove('opacity-60', 'pointer-events-none');
@@ -242,11 +357,6 @@
     optPhoto.classList.toggle('hidden', isPdf);
     if (isPdf) selectRadio('optDocA4');
     nupWrapper.classList.toggle('hidden', !isPdf || uploadedFile.is_nid);
-
-    if (uploadedFile.is_nid) {
-      $('nidInlinePreview').classList.remove('hidden');
-      $('nidInlineImg').src = nidPreviewUrl(800);
-    }
 
     settingsCard.classList.remove('opacity-60', 'pointer-events-none');
     paymentCard.classList.remove('opacity-60', 'pointer-events-none');
@@ -294,9 +404,9 @@
     calculateBill();
   });
   setupRadioGroup(['optNup1', 'optNup2', 'optNup4'], calculateBill);
-  setupRadioGroup(['optBw', 'optColor'], () => { calculateBill(); refreshNidInline(); });
+  setupRadioGroup(['optBw', 'optColor'], () => { calculateBill(); refreshTopLivePreview(); });
   setupRadioGroup(['optSingle', 'optDouble'], calculateBill);
-  setupRadioGroup(['optPortrait', 'optLandscape'], calculateBill);
+  setupRadioGroup(['optPortrait', 'optLandscape'], () => { calculateBill(); refreshTopLivePreview(); });
   setupRadioGroup(['optFitCover', 'optFitContain'], refreshNidInline);
   setupRadioGroup(['payMethodCash', 'payMethodBkash', 'payMethodNagad'], () => {
     const method = checked('payment_method');
@@ -454,6 +564,7 @@
     $('valContrast').innerText = $('studioContrast').value;
     $('valZoom').innerText = (+$('studioZoom').value / 100).toFixed(1) + '×';
     calculateBill();
+    refreshTopLivePreview();
     clearTimeout(studioTimer);
     studioTimer = setTimeout(() => refreshStudio(false), 250);
   }
@@ -1143,6 +1254,28 @@
     loadCropTargetImage();
   };
 
+  let pendingCropBlob = null;
+  let pendingCropPreviewUrl = null;
+
+  window.backToCropEditor = function() {
+    if ($('cropLiveResultView')) $('cropLiveResultView').classList.add('hidden');
+    if ($('cropFooterStep2')) $('cropFooterStep2').classList.add('hidden');
+    if ($('cropEditorView')) $('cropEditorView').classList.remove('hidden');
+    if ($('cropFooterStep1')) $('cropFooterStep1').classList.remove('hidden');
+    if (cropMode === 'smart') {
+      setTimeout(drawSmartCrop, 30);
+    }
+  };
+
+  function showCropStep2LiveResult(blobUrl) {
+    const resImg = $('cropResultPreviewImg');
+    if (resImg) resImg.src = blobUrl;
+    if ($('cropEditorView')) $('cropEditorView').classList.add('hidden');
+    if ($('cropFooterStep1')) $('cropFooterStep1').classList.add('hidden');
+    if ($('cropLiveResultView')) $('cropLiveResultView').classList.remove('hidden');
+    if ($('cropFooterStep2')) $('cropFooterStep2').classList.remove('hidden');
+  }
+
   window.openCropModal = function(side) {
     if (!uploadedFile || uploadedFile.file_type !== 'image') return;
     const modal = $('cropModal');
@@ -1150,6 +1283,7 @@
     if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
     modal.classList.remove('hidden');
 
+    window.backToCropEditor();
     window.setSmartRatio(uploadedFile.is_nid ? 'nid' : 'auto');
     window.setCropMode('smart');
 
@@ -1168,6 +1302,11 @@
       cropper.destroy();
       cropper = null;
     }
+    if (pendingCropPreviewUrl) {
+      URL.revokeObjectURL(pendingCropPreviewUrl);
+      pendingCropPreviewUrl = null;
+    }
+    pendingCropBlob = null;
   };
 
   window.setCropRatio = function(ratio) {
@@ -1200,14 +1339,85 @@
     if (cropper) cropper.rotate(deg);
   };
 
-  window.applyCrop = async function() {
+  // Step 1 -> Step 2: Generate straightened/cropped image and show it LIVE inside the modal
+  window.previewCroppedImage = async function() {
     if (!uploadedFile) return;
-    const btn = $('btnSaveCrop');
-    btn.disabled = true;
-    btn.innerText = 'ক্রপ ও সোজা করা হচ্ছে...';
+    const btn = $('btnPreviewCrop');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerText = 'সোজা ও ক্রপ করা হচ্ছে...';
+    }
 
     if (cropMode === 'smart') {
       try {
+        const res = await fetch('/api/image/perspective-crop-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file_id: uploadedFile.file_id,
+            side: cropNidSide,
+            points: smartPts,
+            ratio: smartTargetRatio
+          })
+        });
+        if (!res.ok) {
+          let errMsg = 'স্মার্ট ক্রপ ব্যর্থ হয়েছে';
+          try { const j = await res.json(); errMsg = j.detail || errMsg; } catch (e) {}
+          alert(errMsg);
+          return;
+        }
+        const blob = await res.blob();
+        pendingCropBlob = blob;
+        if (pendingCropPreviewUrl) URL.revokeObjectURL(pendingCropPreviewUrl);
+        pendingCropPreviewUrl = URL.createObjectURL(blob);
+        showCropStep2LiveResult(pendingCropPreviewUrl);
+      } catch (e) {
+        alert('সার্ভার এরর: ' + e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
+        }
+      }
+      return;
+    }
+
+    // Normal Cropper.js mode
+    if (!cropper) {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
+      }
+      return;
+    }
+
+    cropper.getCroppedCanvas({ maxWidth: 2400, maxHeight: 2400 }).toBlob((blob) => {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
+      }
+      if (!blob) {
+        alert('ক্যানভাস থেকে ছবি তৈরি করা যায়নি।');
+        return;
+      }
+      pendingCropBlob = blob;
+      if (pendingCropPreviewUrl) URL.revokeObjectURL(pendingCropPreviewUrl);
+      pendingCropPreviewUrl = URL.createObjectURL(blob);
+      showCropStep2LiveResult(pendingCropPreviewUrl);
+    }, 'image/jpeg', 0.95);
+  };
+
+  // Step 2 "OK" button: Save cropped/straightened image and go back to print page with live preview updated
+  window.confirmAndSaveCrop = async function() {
+    if (!uploadedFile) return;
+    const btn = $('btnConfirmCropOk');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerText = 'সেভ হচ্ছে...';
+    }
+
+    try {
+      if (cropMode === 'smart') {
         const res = await fetch('/api/image/perspective-crop', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1219,62 +1429,42 @@
           })
         });
         const data = await res.json();
-        if (data.success) {
-          closeCropModal();
-          if (uploadedFile.is_nid) refreshNidInline();
-          else if (currentMode === 'studio') scheduleStudio();
-          alert('✓ ৪-কোণা স্মার্ট ক্রপ ও সোজা করা সফলভাবে সম্পন্ন হয়েছে!');
-        } else {
-          alert('স্মার্ট ক্রপ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        if (!data.success) {
+          alert('স্মার্ট ক্রপ সেভ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+          return;
         }
-      } catch (e) {
-        alert('সার্ভার এরর: ' + e);
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
-      }
-      return;
-    }
+      } else {
+        if (!pendingCropBlob) {
+          alert('ক্রপ করা ছবি পাওয়া যায়নি।');
+          return;
+        }
+        const fd = new FormData();
+        fd.append('file_id', uploadedFile.file_id);
+        fd.append('side', cropNidSide);
+        fd.append('file', pendingCropBlob, 'cropped.jpg');
 
-    if (!cropper) {
-      btn.disabled = false;
-      btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
-      return;
-    }
-
-    cropper.getCroppedCanvas({ maxWidth: 2400, maxHeight: 2400 }).toBlob(async (blob) => {
-      if (!blob) {
-        alert('ক্যানভাস থেকে ছবি তৈরি করা যায়নি।');
-        btn.disabled = false;
-        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
-        return;
-      }
-      const fd = new FormData();
-      fd.append('file_id', uploadedFile.file_id);
-      fd.append('side', cropNidSide);
-      fd.append('file', blob, 'cropped.jpg');
-
-      try {
         const res = await fetch('/api/image/save-crop', {
           method: 'POST',
           body: fd
         });
         const data = await res.json();
-        if (data.success) {
-          closeCropModal();
-          if (uploadedFile.is_nid) refreshNidInline();
-          else if (currentMode === 'studio') scheduleStudio();
-          alert('✓ ছবি সফলভাবে ক্রপ সম্পন্ন হয়েছে!');
-        } else {
+        if (!data.success) {
           alert('ক্রপ সংরক্ষণ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+          return;
         }
-      } catch (e) {
-        alert('সার্ভার এরর: ' + e);
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<span>✓</span> <span>ক্রপ ও সোজা করুন</span>';
       }
-    }, 'image/jpeg', 0.95);
+
+      closeCropModal();
+      refreshTopLivePreview();
+      if (currentMode === 'studio') scheduleStudio();
+    } catch (e) {
+      alert('সার্ভার এরর: ' + e);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>ওকে (প্রিন্ট পেইজে যান)</span>';
+      }
+    }
   };
 
   // ── CamScanner Enhancer with Live Before/After Preview ──
@@ -1348,8 +1538,8 @@
       const data = await res.json();
       if (data.success) {
         closeCamscanModal();
-        if (uploadedFile.is_nid) refreshNidInline();
-        else if (currentMode === 'studio') scheduleStudio();
+        refreshTopLivePreview();
+        if (currentMode === 'studio') scheduleStudio();
         alert('✓ স্ক্যান ইফেক্ট সফলভাবে সেভ হয়েছে!');
       } else {
         alert('স্ক্যানার ইফেক্ট ব্যর্থ: ' + (data.detail || ''));
@@ -1413,8 +1603,8 @@
         const data = await res.json();
         if (data.success) {
           closeRemoveBgModal();
-          if (uploadedFile.is_nid) refreshNidInline();
-          else if (currentMode === 'studio') scheduleStudio();
+          refreshTopLivePreview();
+          if (currentMode === 'studio') scheduleStudio();
           alert('✓ remove.bg থেকে ডাউনলোড করা ছবি সফলভাবে যুক্ত হয়েছে!');
         } else {
           alert('আপলোড ব্যর্থ হয়েছে: ' + (data.detail || ''));
@@ -1448,10 +1638,9 @@
       });
       const data = await res.json();
       if (data.success) {
+        refreshTopLivePreview();
         if (currentMode === 'studio') {
           scheduleStudio();
-        } else if (uploadedFile.is_nid) {
-          refreshNidInline();
         }
         if (showAlert) alert('✓ ফাইল সফলভাবে ৯০° ঘোরানো হয়েছে!');
       } else {
@@ -1484,8 +1673,12 @@
       const cur = checked('orientation') || 'portrait';
       const target = cur === 'landscape' ? 'portrait' : 'landscape';
       selectRadio(target === 'landscape' ? 'optLandscape' : 'optPortrait');
+      refreshTopLivePreview();
       openPrintPreview();
     });
   }
+
+  // Restore previously uploaded file across page refresh
+  restoreSessionState();
 
 })();

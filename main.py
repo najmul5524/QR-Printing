@@ -1036,6 +1036,69 @@ async def perspective_crop_endpoint(payload: dict = Body(...)):
     return {"success": True, "file_id": file_id}
 
 
+
+
+@app.get("/api/file/check/{file_id}")
+def check_file_exists_endpoint(file_id: str):
+    """Checks if a previously uploaded file or NID pair still exists on disk (for session restore on refresh)."""
+    safe_id = os.path.basename(str(file_id or ""))
+    if not safe_id:
+        return {"exists": False}
+    if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = safe_id[4:]
+        if not NID_TOKEN_RE.match(token or ""):
+            return {"exists": False}
+        front = os.path.join(UPLOAD_DIR, f"nid_{token}_f.jpg")
+        back = os.path.join(UPLOAD_DIR, f"nid_{token}_b.jpg")
+        return {"exists": bool(os.path.isfile(front) and os.path.isfile(back))}
+    path = os.path.join(UPLOAD_DIR, safe_id)
+    return {"exists": os.path.isfile(path)}
+
+
+@app.post("/api/image/perspective-crop-preview")
+def perspective_crop_preview_endpoint(payload: dict = Body(...)):
+    """
+    Renders a live in-memory preview of the 4-corner perspective warp
+    without overwriting the file on disk yet (until the user clicks OK).
+    """
+    import image_fx
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    side = str(payload.get("side", "front"))
+    if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        token = file_id[4:]
+        front, back = nid_paths(token)
+        src = back if side == "back" else front
+    else:
+        src = resolve_upload(file_id)
+
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be perspective-cropped")
+
+    raw_pts = payload.get("points", [])
+    if not isinstance(raw_pts, list) or len(raw_pts) < 4:
+        raise HTTPException(status_code=400, detail="4 corner points are required")
+
+    norm_pts = [(float(p.get("x", 0.0)), float(p.get("y", 0.0))) for p in raw_pts[:4]]
+    ratio_key = str(payload.get("ratio", "auto")).strip().lower()
+    ratio_map = {
+        "auto": None,
+        "free": None,
+        "nid": 85.6 / 54.0,
+        "passport": 35.0 / 45.0,
+        "stamp": 20.0 / 25.0,
+        "square": 1.0,
+        "a4": 210.0 / 297.0
+    }
+    target_ratio = ratio_map.get(ratio_key, None)
+
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio)
+        buf = io.BytesIO()
+        warped.save(buf, "JPEG", quality=90)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/order/create")
 async def customer_create_order(request: Request):
     data = await request.json()
