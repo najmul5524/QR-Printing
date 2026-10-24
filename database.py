@@ -80,15 +80,19 @@ def init_db():
     );
     """)
     
-    # Migration: add printer_target to orders table if not present
+    # Migration: add printer_target & orientation to orders table if not present
     order_cols = [r[1] for r in cursor.execute("PRAGMA table_info(orders)").fetchall()]
     if "printer_target" not in order_cols:
         cursor.execute("ALTER TABLE orders ADD COLUMN printer_target TEXT DEFAULT ''")
+    if "orientation" not in order_cols:
+        cursor.execute("ALTER TABLE orders ADD COLUMN orientation TEXT DEFAULT 'portrait'")
 
-    # Migration: older databases do not have the A4 photo-sheet rate yet
+    # Migration: shops table extensions
     cols = [r[1] for r in cursor.execute("PRAGMA table_info(shops)").fetchall()]
     if "rate_photo_a4" not in cols:
         cursor.execute("ALTER TABLE shops ADD COLUMN rate_photo_a4 REAL DEFAULT 40.0")
+    if "remove_bg_api_key" not in cols:
+        cursor.execute("ALTER TABLE shops ADD COLUMN remove_bg_api_key TEXT DEFAULT ''")
 
     # 4. File Transfers Table (customer -> shop inbox, shop -> customer share links)
     cursor.execute("""
@@ -209,7 +213,8 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         rate_color_single = ?,
         rate_color_double = ?,
         rate_photo_4x6 = ?,
-        rate_photo_a4 = ?
+        rate_photo_a4 = ?,
+        remove_bg_api_key = ?
     WHERE id = ?
     """, (
         data.get("name"),
@@ -223,6 +228,7 @@ def update_shop_settings(shop_id: int, data: Dict[str, Any]):
         data.get("rate_color_double", 18.0),
         data.get("rate_photo_4x6", 30.0),
         data.get("rate_photo_a4", 40.0),
+        data.get("remove_bg_api_key", ""),
         shop_id
     ))
     conn.commit()
@@ -235,9 +241,9 @@ def create_order(order_data: Dict[str, Any]) -> str:
     INSERT INTO orders (
         id, shop_id, customer_name, customer_phone, file_path, original_filename,
         file_type, page_count, copies, color_mode, paper_size, duplex,
-        page_range, total_price, payment_method, trx_id, status, created_at
+        page_range, orientation, printer_target, total_price, payment_method, trx_id, status, created_at
     ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     """, (
         order_data["id"],
@@ -253,6 +259,8 @@ def create_order(order_data: Dict[str, Any]) -> str:
         order_data.get("paper_size", "A4"),
         order_data.get("duplex", "single"),
         order_data.get("page_range", "all"),
+        order_data.get("orientation", "portrait"),
+        order_data.get("printer_target", ""),
         order_data["total_price"],
         order_data.get("payment_method", "counter_cash"),
         order_data.get("trx_id", ""),
@@ -275,7 +283,7 @@ def update_order_details(order_id: str, updates: Dict[str, Any]):
     """Allows shop admin to edit print parameters (copies, color, paper_size, page_range, printer_target, total_price, etc.)"""
     allowed_keys = {
         "copies", "color_mode", "paper_size", "duplex", "page_range",
-        "total_price", "printer_target", "customer_name"
+        "orientation", "total_price", "printer_target", "customer_name"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed_keys}
     if not filtered:

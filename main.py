@@ -25,6 +25,7 @@ from starlette.background import BackgroundTask
 import database as db
 import studio
 import utils
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 
 # Ensure directories exist
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -358,7 +359,8 @@ async def update_settings(
     rate_color_single: float = Form(10.0),
     rate_color_double: float = Form(18.0),
     rate_photo_4x6: float = Form(30.0),
-    rate_photo_a4: float = Form(40.0)
+    rate_photo_a4: float = Form(40.0),
+    remove_bg_api_key: str = Form("")
 ):
     shop = get_current_shop(request)
     if not shop:
@@ -375,7 +377,8 @@ async def update_settings(
         "rate_color_single": rate_color_single,
         "rate_color_double": rate_color_double,
         "rate_photo_4x6": rate_photo_4x6,
-        "rate_photo_a4": rate_photo_a4
+        "rate_photo_a4": rate_photo_a4,
+        "remove_bg_api_key": remove_bg_api_key.strip()
     })
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -423,7 +426,8 @@ async def approve_order(order_id: str, request: Request):
         "duplex": order["duplex"],
         "paper_size": order["paper_size"],
         "page_range": order["page_range"],
-        "printer_name": order["printer_target"] if "printer_target" in order.keys() and order["printer_target"] else ""
+        "printer_name": order["printer_target"] if "printer_target" in order.keys() and order["printer_target"] else "",
+        "orientation": order["orientation"] if "orientation" in order.keys() and order["orientation"] else "portrait"
     })
     
     if job_dispatched:
@@ -479,6 +483,8 @@ async def edit_order_details(order_id: str, request: Request):
         updates["paper_size"] = data["paper_size"]
     if "duplex" in data and data["duplex"] in ("single", "double"):
         updates["duplex"] = data["duplex"]
+    if "orientation" in data and data["orientation"] in ("portrait", "landscape"):
+        updates["orientation"] = data["orientation"]
     if "page_range" in data:
         updates["page_range"] = str(data["page_range"])[:50]
     if "printer_target" in data:
@@ -689,7 +695,8 @@ def preview_info(file_id: str, nup: int = 1):
 
 
 @app.get("/api/preview-page/{file_id}")
-def preview_page(file_id: str, page: int = 1, paper_size: str = "A4", nup: int = 1, color: str = "color"):
+def preview_page(file_id: str, page: int = 1, paper_size: str = "A4", nup: int = 1, color: str = "color", orientation: str = "portrait"):
+    orientation = clean_choice(orientation, ("portrait", "landscape"), "portrait")
     """Renders ONE printed sheet exactly as it will come out of the printer."""
     path = resolve_upload(file_id)
     color = clean_choice(color, ("color", "bw"), "color")
@@ -702,13 +709,13 @@ def preview_page(file_id: str, page: int = 1, paper_size: str = "A4", nup: int =
             cache = os.path.join(UPLOAD_DIR, f"pv_nup{nup}_{os.path.basename(path)}")
             source = utils.get_or_create_nup_preview(path, cache, nup)
         try:
-            data = utils.render_pdf_page_preview(source, page - 1, color)
+            data = utils.render_pdf_page_preview(source, page - 1, color, orientation=orientation)
         except IndexError:
             raise HTTPException(status_code=404, detail="Page not found")
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Preview failed: {e}")
     else:
-        data = utils.render_image_preview(path, clean_choice(paper_size, ("A4", "4x6"), "A4"), color)
+        data = utils.render_image_preview(path, clean_choice(paper_size, ("A4", "4x6"), "A4"), color, orientation=orientation)
 
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=120"})
 
@@ -794,6 +801,170 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
         os.replace(temp_out, src)
     else:
         raise HTTPException(status_code=400, detail="Cannot rotate this file format")
+
+    return {"success": True, "file_id": file_id}
+
+
+
+
+def call_remove_bg_api(image_bytes: bytes, api_key: str, bg_color: Optional[str] = None) -> Optional[bytes]:
+    """Calls official remove.bg REST API (v1.0) to remove background."""
+    import urllib.request
+    boundary = "----WebKitFormBoundary" + secrets.token_hex(8)
+    body = bytearray()
+    
+    # image_file
+    body.extend(f"--{boundary}\r\n".encode())
+    body.extend(b'Content-Disposition: form-data; name="image_file"; filename="input.jpg"\r\n')
+    body.extend(b'Content-Type: image/jpeg\r\n\r\n')
+    body.extend(image_bytes)
+    body.extend(b'\r\n')
+    
+    # size = auto
+    body.extend(f"--{boundary}\r\n".encode())
+    body.extend(b'Content-Disposition: form-data; name="size"\r\n\r\nauto\r\n')
+    
+    # bg_color if specified (hex without #)
+    if bg_color and bg_color.lower() not in ("none", "transparent", ""):
+        clean_col = bg_color.lstrip("#")
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="bg_color"\r\n\r\n{clean_col}\r\n'.encode())
+        
+    body.extend(f"--{boundary}--\r\n".encode())
+    
+    req = urllib.request.Request(
+        "https://api.remove.bg/v1.0/removebg",
+        data=body,
+        headers={
+            "X-Api-Key": api_key,
+            "Content-Type": f"multipart/form-data; boundary={boundary}"
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        if resp.status == 200:
+            return resp.read()
+    return None
+
+
+@app.post("/api/image/save-crop")
+async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(...)):
+    """Receives pixel-perfect cropped canvas blob from client Cropper.js."""
+    file_id = os.path.basename(file_id)
+    dest = resolve_upload(file_id)
+    if utils.get_ext(dest) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images can be cropped")
+
+    content = await file.read()
+    with Image.open(io.BytesIO(content)) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im.save(dest, "JPEG", quality=95)
+
+    return {"success": True, "file_id": file_id}
+
+
+@app.post("/api/image/remove-bg")
+async def remove_bg_endpoint(payload: dict = Body(...)):
+    """
+    Remove.bg style background removal:
+    1. Uses official remove.bg API if shop key / env key is available
+    2. Falls back seamlessly to built-in high-accuracy background segmentation
+    3. Colors background (white, sky blue, navy, red, light gray, transparent)
+    """
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images are supported")
+
+    bg_color = str(payload.get("bg_color", "#ffffff")).strip()
+    shop_id = int(payload.get("shop_id", 0) or 0)
+    user_api_key = str(payload.get("api_key", "")).strip()
+
+    # Determine API key (payload -> shop settings -> environment)
+    api_key = user_api_key
+    if not api_key and shop_id:
+        s = db.get_shop_by_id(shop_id)
+        if s and s.get("remove_bg_api_key"):
+            api_key = s["remove_bg_api_key"].strip()
+    if not api_key:
+        api_key = os.environ.get("REMOVE_BG_API_KEY", "").strip()
+
+    with open(src, "rb") as f:
+        src_bytes = f.read()
+
+    processed_bytes = None
+    engine_used = "local"
+
+    if api_key:
+        try:
+            processed_bytes = await asyncio.to_thread(call_remove_bg_api, src_bytes, api_key, bg_color)
+            if processed_bytes:
+                engine_used = "remove.bg API"
+        except Exception as e:
+            print(f"[RemoveBG] API call failed: {e}, using local fallback")
+
+    if not processed_bytes:
+        import image_fx
+        with Image.open(io.BytesIO(src_bytes)) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            tol = float(payload.get("tol", 45.0))
+            rgba, mask = image_fx.advanced_remove_background(im, tol=tol)
+            if bg_color and bg_color.lower() not in ("none", "transparent"):
+                bg = Image.new("RGBA", rgba.size, bg_color)
+                bg.paste(rgba, (0, 0), rgba)
+                final_im = bg.convert("RGB")
+            else:
+                final_im = rgba
+            buf = io.BytesIO()
+            final_im.save(buf, "PNG" if bg_color in ("none", "transparent") else "JPEG", quality=95)
+            processed_bytes = buf.getvalue()
+
+    with open(src, "wb") as f:
+        f.write(processed_bytes)
+
+    return {"success": True, "file_id": file_id, "engine": engine_used}
+
+
+@app.post("/api/image/apply-suit")
+async def apply_suit_endpoint(payload: dict = Body(...)):
+    """Overlays a formal suit/coat on a passport photo with custom scale and positioning."""
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images are supported")
+
+    suit_id = str(payload.get("suit_id", "suit1")).strip()
+    zoom = float(payload.get("zoom", 1.0))
+    ox = float(payload.get("ox", 0.0))
+    oy = float(payload.get("oy", 0.0))
+
+    import image_fx
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        res = image_fx.apply_dress_overlay(im, suit_id, suit_zoom=zoom, suit_ox=ox, suit_oy=oy)
+        res.save(src, "JPEG", quality=95)
+
+    return {"success": True, "file_id": file_id}
+
+
+@app.post("/api/image/replace-cutout")
+async def replace_cutout_endpoint(file_id: str = Form(...), file: UploadFile = File(...), bg_color: str = Form("#ffffff")):
+    """Directly replaces current photo with a cutout PNG downloaded from remove.bg website."""
+    file_id = os.path.basename(file_id)
+    dest = resolve_upload(file_id)
+    if utils.get_ext(dest) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Only images are supported")
+
+    content = await file.read()
+    with Image.open(io.BytesIO(content)) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode == "RGBA" and bg_color and bg_color.lower() not in ("none", "transparent"):
+            bg = Image.new("RGBA", im.size, bg_color)
+            bg.paste(im, (0, 0), im)
+            im = bg.convert("RGB")
+        else:
+            im = im.convert("RGB")
+        im.save(dest, "JPEG", quality=95)
 
     return {"success": True, "file_id": file_id}
 
@@ -915,6 +1086,8 @@ async def customer_create_order(request: Request):
         "paper_size": paper_size,
         "duplex": duplex,
         "page_range": "all",
+        "orientation": orientation,
+        "printer_target": "",
         "total_price": round(total_price, 2),
         "payment_method": payment_method,
         "trx_id": re.sub(r"[^A-Za-z0-9]", "", str(data.get("trx_id", "")))[:30],

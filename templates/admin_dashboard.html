@@ -317,6 +317,12 @@
               <input type="number" step="1" name="rate_photo_a4" value="{{ shop.rate_photo_a4 }}" class="w-full px-3 py-1.5 border rounded">
             </div>
           </div>
+
+          <div class="pt-2 border-t">
+            <span class="text-gray-600 font-bold block mb-1">remove.bg API Key (ঐচ্ছিক — ব্যাকগ্রাউন্ড রিমুভ):</span>
+            <input type="text" name="remove_bg_api_key" value="{{ shop.remove_bg_api_key or '' }}" placeholder="API Key বসালে রিমুভ ব্যাকগ্রাউন্ড remove.bg এর মত নিখুঁত হবে" class="w-full px-3 py-1.5 border rounded font-mono text-xs">
+            <p class="text-[10px] text-gray-400 mt-0.5">remove.bg-এ অ্যাকাউন্ট খুলে API Key কপি করে এখানে বসান। না বসালেও লোকাল এআই দিয়ে রিমুভ হবে।</p>
+          </div>
         </div>
 
         <div class="pt-4 border-t flex justify-end gap-2">
@@ -381,10 +387,17 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-3">
           <div>
             <label class="block font-semibold text-gray-600 mb-1">পেজ রেঞ্জ</label>
             <input type="text" id="editPageRange" placeholder="all অথবা 1,3,5-7" class="w-full px-3 py-2 border rounded-lg text-sm font-mono">
+          </div>
+          <div>
+            <label class="block font-semibold text-gray-600 mb-1">ওরিয়েন্টেশন</label>
+            <select id="editOrientation" class="w-full px-3 py-2 border rounded-lg text-sm bg-white font-bold">
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
           </div>
           <div>
             <label class="block font-semibold text-gray-600 mb-1">মোট বিল ৳</label>
@@ -482,6 +495,7 @@
       document.getElementById('editPaperSize').value = order.paper_size || 'A4';
       document.getElementById('editDuplex').value = order.duplex || 'single';
       document.getElementById('editPageRange').value = order.page_range || 'all';
+      document.getElementById('editOrientation').value = order.orientation || 'portrait';
       document.getElementById('editTotalPrice').value = order.total_price || 0;
       document.getElementById('editPrinterTarget').value = order.printer_target || '';
       document.getElementById('editOrderModal').classList.remove('hidden');
@@ -500,6 +514,7 @@
         paper_size: document.getElementById('editPaperSize').value,
         duplex: document.getElementById('editDuplex').value,
         page_range: document.getElementById('editPageRange').value.trim() || 'all',
+        orientation: document.getElementById('editOrientation').value,
         total_price: parseFloat(document.getElementById('editTotalPrice').value) || 0,
         printer_target: document.getElementById('editPrinterTarget').value.trim()
       };

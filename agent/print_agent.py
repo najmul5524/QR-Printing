@@ -70,12 +70,17 @@ def find_sumatra(config: dict):
     return None
 
 
-def print_with_sumatra(sumatra: str, file_path: str, copies: int, printer_name: str = "") -> bool:
-    settings = f"noscale,{max(1, copies)}x"
+def print_with_sumatra(sumatra: str, file_path: str, copies: int, printer_name: str = "", orientation: str = "portrait") -> bool:
+    settings_items = ["noscale", f"{max(1, copies)}x"]
+    if orientation == "landscape":
+        settings_items.append("landscape")
+    elif orientation == "portrait":
+        settings_items.append("portrait")
+    settings = ",".join(settings_items)
     cmd = [sumatra]
     cmd += ["-print-to", printer_name] if printer_name else ["-print-to-default"]
     cmd += ["-print-settings", settings, "-silent", file_path]
-    print(f"[PRINT] SumatraPDF (no scaling, {copies} copy): {os.path.basename(file_path)}")
+    print(f"[PRINT] SumatraPDF ({orientation}, no scaling, {copies} copy): {os.path.basename(file_path)}")
     result = subprocess.run(cmd, timeout=180)
     return result.returncode == 0
 
@@ -96,8 +101,9 @@ def print_file_windows(file_path: str, copies: int = 1, config: dict = None) -> 
             return True
 
         sumatra = find_sumatra(config)
+        orientation = (config.get("orientation") or "portrait").strip()
         if sumatra and file_path.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
-            return print_with_sumatra(sumatra, file_path, copies, printer_name)
+            return print_with_sumatra(sumatra, file_path, copies, printer_name, orientation)
 
         for n in range(copies):
             try:
@@ -146,6 +152,7 @@ async def handle_print_job(job_data: dict, server_url: str, api_key: str, websoc
         print(f"[2/3] Sending to printer...")
         # Use job-specific printer if designated by admin, else fallback to config
         effective_config = dict(config or {})
+        effective_config["orientation"] = job_data.get("orientation", "portrait")
         if target_printer:
             effective_config["printer_name"] = target_printer
         success = await asyncio.to_thread(print_file_windows, local_file_path, copies, effective_config)

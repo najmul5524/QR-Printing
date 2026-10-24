@@ -224,8 +224,12 @@
     const isImg = uploadedFile.file_type === 'image';
     const btnCrop = $('btnOpenCrop');
     const btnCam = $('btnOpenCamScan');
+    const btnRbg = $('btnOpenRemoveBg');
+    const btnDress = $('btnOpenDress');
     if (btnCrop) btnCrop.classList.toggle('hidden', !isImg);
     if (btnCam) btnCam.classList.toggle('hidden', !isImg);
+    if (btnRbg) btnRbg.classList.toggle('hidden', !isImg);
+    if (btnDress) btnDress.classList.toggle('hidden', !isImg);
 
     if (currentMode === 'studio') {
       studioCard.classList.remove('opacity-60', 'pointer-events-none');
@@ -605,12 +609,26 @@
       return;
     }
 
+    const orient = checked('orientation') || 'portrait';
+    const orientBn = orient === 'landscape' ? 'আড়াআড়ি (Landscape)' : 'লম্বালম্বি (Portrait)';
+    const btnOrientIcon = $('previewOrientIcon');
+    const btnOrientText = $('previewOrientText');
+    if (btnOrientIcon && btnOrientText) {
+      if (orient === 'landscape') {
+        btnOrientIcon.innerText = '📱';
+        btnOrientText.innerText = 'Portrait করুন';
+      } else {
+        btnOrientIcon.innerText = '🖥️';
+        btnOrientText.innerText = 'Landscape করুন';
+      }
+    }
+
     if (uploadedFile.file_type === 'image') {
       const photo = checked('paper_size') === '4x6';
-      dim.innerText = photo ? '৪×৬ ইঞ্চি পাসপোর্ট শিট (৬টি ফটো)' : 'A4 পেপার';
+      dim.innerText = photo ? '৪×৬ ইঞ্চি পাসপোর্ট শিট (৬টি ফটো)' : `A4 পেপার — ${orientBn}`;
       addPreviewImage(
-        `/api/preview-page/${uploadedFile.file_id}?paper_size=${photo ? '4x6' : 'A4'}&color=${color}`,
-        photo ? '৪×৬ ফটো শিট' : 'A4 পেজ'
+        `/api/preview-page/${uploadedFile.file_id}?paper_size=${photo ? '4x6' : 'A4'}&color=${color}&orientation=${orient}&t=${Date.now()}`,
+        photo ? '৪×৬ ফটো শিট' : `A4 পেজ (${orientBn})`
       );
       noteEl.innerText = photo ? '✂️ ৬টি ছবি ৪×৬ ফটো পেপারে সাজানো হবে।' : '📄 ছবি A4 পাতায় ফিট করে প্রিন্ট হবে।';
       return;
@@ -619,15 +637,15 @@
     // PDF
     const nup = parseInt(checked('pages_per_sheet') || '1', 10);
     dim.innerText = nup > 1
-      ? `A4 পেপার (${nup}-in-1, ${bn(uploadedFile.page_count)} পাতা)`
-      : `A4 পেপার (${bn(uploadedFile.page_count)} টি পাতা)`;
+      ? `A4 পেপার (${nup}-in-1, ${bn(uploadedFile.page_count)} পাতা, ${orientBn})`
+      : `A4 পেপার (${bn(uploadedFile.page_count)} টি পাতা, ${orientBn})`;
     try {
       const info = await (await fetch(`/api/preview-info/${uploadedFile.file_id}?nup=${nup}`)).json();
       if (!info.can_render) throw new Error('no renderer');
       const shown = Math.min(info.sheets, MAX_PREVIEW_SHEETS);
       for (let i = 1; i <= shown; i++) {
         addPreviewImage(
-          `/api/preview-page/${uploadedFile.file_id}?page=${i}&nup=${nup}&color=${color}`,
+          `/api/preview-page/${uploadedFile.file_id}?page=${i}&nup=${nup}&color=${color}&orientation=${orient}&t=${Date.now()}`,
           `শিট ${bn(i)} / ${bn(info.sheets)}`
         );
       }
@@ -688,6 +706,7 @@
       nid_fit: checked('nid_fit') || 'cover',
       nid_rot_front: nidRot.front,
       nid_rot_back: nidRot.back,
+      orientation: checked('orientation') || 'portrait',
       payment_method: paymentMethod,
       trx_id: trxId,
       customer_name: $('custNameInput').value.trim() || 'Walk-in'
@@ -790,63 +809,109 @@
   // open the transfer tab directly via /p/shop#transfer
   if (location.hash === '#transfer') setMode('transfer');
 
-  // ── Crop Modal Logic ──
+  // ── Cropper.js Integration ──
+  let cropper = null;
+  let activeRatio = 'free';
+
   window.openCropModal = function() {
     if (!uploadedFile || uploadedFile.file_type !== 'image') return;
     const modal = $('cropModal');
     const target = $('cropImgTarget');
-    target.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
     modal.classList.remove('hidden');
+    if (cropper) {
+      cropper.destroy();
+      cropper = null;
+    }
+    target.onload = () => {
+      cropper = new Cropper(target, {
+        viewMode: 1,
+        autoCropArea: 0.9,
+        responsive: true,
+        background: false,
+        ready() {
+          setCropRatio('free');
+        }
+      });
+    };
+    target.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
   };
+
   window.closeCropModal = function() {
     const modal = $('cropModal');
     if (modal) modal.classList.add('hidden');
+    if (cropper) {
+      cropper.destroy();
+      cropper = null;
+    }
   };
+
   window.setCropRatio = function(ratio) {
-    const box = $('cropBox');
-    if (ratio === 'square') {
-      box.style.width = '70%';
-      box.style.height = '70%';
-    } else if (ratio === 'passport') {
-      box.style.width = '60%';
-      box.style.height = '80%';
-    } else {
-      box.style.width = '85%';
-      box.style.height = '85%';
-    }
+    activeRatio = ratio;
+    const btns = {
+      free: $('cropBtnFree'),
+      passport: $('cropBtnPassport'),
+      stamp: $('cropBtnStamp'),
+      square: $('cropBtnSquare'),
+      '4x6': $('cropBtn4x6')
+    };
+    Object.keys(btns).forEach(k => {
+      const b = btns[k];
+      if (!b) return;
+      const on = k === ratio;
+      b.className = on
+        ? 'crop-ratio-btn py-1.5 px-2 bg-pink-600 text-white font-bold rounded-lg shadow-sm'
+        : 'crop-ratio-btn py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg';
+    });
+
+    if (!cropper) return;
+    if (ratio === 'passport') cropper.setAspectRatio(35 / 45);
+    else if (ratio === 'stamp') cropper.setAspectRatio(20 / 25);
+    else if (ratio === 'square') cropper.setAspectRatio(1);
+    else if (ratio === '4x6') cropper.setAspectRatio(4 / 6);
+    else cropper.setAspectRatio(NaN);
   };
-  window.applyCrop = async function() {
-    if (!uploadedFile) return;
-    const box = $('cropBox');
-    const cont = $('cropContainer');
-    const img = $('cropImgTarget');
 
-    const iRect = img.getBoundingClientRect();
-    const bRect = box.getBoundingClientRect();
+  window.rotateCropper = function(deg) {
+    if (cropper) cropper.rotate(deg);
+  };
 
-    const nx = Math.max(0, (bRect.left - iRect.left) / iRect.width);
-    const ny = Math.max(0, (bRect.top - iRect.top) / iRect.height);
-    const nw = Math.min(1 - nx, bRect.width / iRect.width);
-    const nh = Math.min(1 - ny, bRect.height / iRect.height);
+  window.applyCrop = function() {
+    if (!uploadedFile || !cropper) return;
+    const btn = $('btnSaveCrop');
+    btn.disabled = true;
+    btn.innerText = 'ক্রপ সংরক্ষিত হচ্ছে...';
 
-    try {
-      const res = await fetch('/api/image/crop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file_id: uploadedFile.file_id,
-          box: { x: nx, y: ny, w: nw, h: nh }
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        closeCropModal();
-        if (currentMode === 'studio') scheduleStudio();
-        alert('ছবি সফলভাবে ক্রপ করা হয়েছে!');
+    cropper.getCroppedCanvas({ maxWidth: 2400, maxHeight: 2400 }).toBlob(async (blob) => {
+      if (!blob) {
+        alert('ক্যানভাস থেকে ছবি তৈরি করা যায়নি।');
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>ক্রপ সম্পন্ন করুন</span>';
+        return;
       }
-    } catch (e) {
-      alert('ক্রপ ব্যর্থ হয়েছে: ' + e);
-    }
+      const fd = new FormData();
+      fd.append('file_id', uploadedFile.file_id);
+      fd.append('file', blob, 'cropped.jpg');
+
+      try {
+        const res = await fetch('/api/image/save-crop', {
+          method: 'POST',
+          body: fd
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeCropModal();
+          if (currentMode === 'studio') scheduleStudio();
+          alert('✓ ছবি সফলভাবে ক্রপ সম্পন্ন হয়েছে!');
+        } else {
+          alert('ক্রপ সংরক্ষণ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        }
+      } catch (e) {
+        alert('সার্ভার এরর: ' + e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>ক্রপ সম্পন্ন করুন</span>';
+      }
+    }, 'image/jpeg', 0.95);
   };
 
   // ── CamScanner Enhancer Logic ──
@@ -874,20 +939,271 @@
       if (data.success) {
         closeCamscanModal();
         if (currentMode === 'studio') scheduleStudio();
-        alert('CamScanner ইফেক্ট প্রয়োগ করা হয়েছে! প্রিন্ট কোয়ালিটি উন্নত হয়েছে।');
+        alert('✓ CamScanner ইফেক্ট সফলভাবে প্রয়োগ করা হয়েছে!');
+      } else {
+        alert('স্ক্যানার ইফেক্ট ব্যর্থ: ' + (data.detail || ''));
       }
     } catch (e) {
-      alert('স্ক্যানার ইফেক্ট প্রয়োগ ব্যর্থ হয়েছে: ' + e);
+      alert('স্ক্যানার ইফেক্ট প্রয়োগ ব্যর্থ হয়েছে: ' + e);
     }
   };
 
+  // ── Remove Background Modal Logic ──
+  let selectedRbgColor = '#ffffff';
+
+  window.openRemoveBgModal = function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('removeBgModal');
+    if (modal) modal.classList.remove('hidden');
+  };
+
+  window.closeRemoveBgModal = function() {
+    const modal = $('removeBgModal');
+    if (modal) modal.classList.add('hidden');
+  };
+
+  const rbgBtns = $('removeBgColorBtns');
+  if (rbgBtns) {
+    rbgBtns.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-bg]');
+      if (!b) return;
+      selectedRbgColor = b.dataset.bg;
+      document.querySelectorAll('#removeBgColorBtns .rbg-color-btn').forEach(btn => {
+        const on = btn.dataset.bg === selectedRbgColor;
+        btn.classList.toggle('border-purple-600', on);
+        btn.classList.toggle('bg-purple-50', on);
+        btn.classList.toggle('border-gray-200', !on);
+      });
+    });
+  }
+
+  window.runRemoveBgAI = async function() {
+    if (!uploadedFile) return;
+    const btn = $('btnRunRemoveBg');
+    const txt = $('runRemoveBgText');
+    btn.disabled = true;
+    txt.innerText = 'ব্যাকগ্রাউন্ড রিমুভ ও প্রসেসিং হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন';
+
+    try {
+      const res = await fetch('/api/image/remove-bg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          bg_color: selectedRbgColor,
+          shop_id: SHOP_ID,
+          tol: 45
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeRemoveBgModal();
+        if (currentMode === 'studio') scheduleStudio();
+        alert(`✓ ব্যাকগ্রাউন্ড সফলভাবে পরিবর্তন করা হয়েছে! (${data.engine || 'AI Engine'})`);
+      } else {
+        alert('রিমুভ ব্যর্থ হয়েছে: ' + (data.detail || ''));
+      }
+    } catch (e) {
+      alert('সার্ভার এরর: ' + e);
+    } finally {
+      btn.disabled = false;
+      txt.innerText = 'ব্যাকগ্রাউন্ড রিমুভ ও রঙ পরিবর্তন করুন';
+    }
+  };
+
+  const cutoutInput = $('cutoutFileInput');
+  if (cutoutInput) {
+    cutoutInput.addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      if (!f || !uploadedFile) return;
+      const fd = new FormData();
+      fd.append('file_id', uploadedFile.file_id);
+      fd.append('file', f);
+      fd.append('bg_color', selectedRbgColor);
+
+      try {
+        const res = await fetch('/api/image/replace-cutout', {
+          method: 'POST',
+          body: fd
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeRemoveBgModal();
+          if (currentMode === 'studio') scheduleStudio();
+          alert('✓ remove.bg থেকে কাটআউট ছবি সফলভাবে যুক্ত হয়েছে!');
+        } else {
+          alert('আপলোড ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        }
+      } catch (err) {
+        alert('সার্ভার এরর: ' + err);
+      } finally {
+        cutoutInput.value = '';
+      }
+    });
+  }
+
+  // ── Dress Change Modal Logic ──
+  let selectedModalSuit = 'suit1';
+  let modalPhotoImg = new Image();
+  let modalSuitImg = new Image();
+
+  window.openDressModal = function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('dressModal');
+    if (modal) modal.classList.remove('hidden');
+    modalPhotoImg.crossOrigin = 'anonymous';
+    modalPhotoImg.onload = () => drawDressCanvas();
+    modalPhotoImg.src = `/api/preview/${uploadedFile.file_id}?t=${Date.now()}`;
+    loadSuitImage(selectedModalSuit);
+  };
+
+  window.closeDressModal = function() {
+    const modal = $('dressModal');
+    if (modal) modal.classList.add('hidden');
+  };
+
+  function loadSuitImage(suitId) {
+    selectedModalSuit = suitId;
+    modalSuitImg.crossOrigin = 'anonymous';
+    modalSuitImg.onload = () => drawDressCanvas();
+    renderSuitVectorToImage(suitId);
+  }
+
+  function renderSuitVectorToImage(suitId) {
+    const c = document.createElement('canvas');
+    c.width = 400; c.height = 400;
+    const ctx = c.getContext('2d');
+    drawSuitVector(ctx, suitId, 400, 400);
+    modalSuitImg.src = c.toDataURL();
+  }
+
+  function drawSuitVector(ctx, suitId, w, h) {
+    ctx.clearRect(0, 0, w, h);
+    if (suitId === 'suit2') {
+      ctx.fillStyle = '#e0f2fe'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(250, 110); ctx.lineTo(215, 280); ctx.lineTo(185, 280); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#f59e0b'; ctx.beginPath(); ctx.moveTo(190, 140); ctx.lineTo(210, 140); ctx.lineTo(216, 165); ctx.lineTo(184, 165); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#d97706'; ctx.beginPath(); ctx.moveTo(186, 165); ctx.lineTo(214, 165); ctx.lineTo(220, 340); ctx.lineTo(200, 375); ctx.lineTo(180, 340); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#1e3a8a'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(40, 165); ctx.lineTo(10, 400); ctx.lineTo(390, 400); ctx.lineTo(360, 165); ctx.lineTo(250, 110); ctx.lineTo(225, 230); ctx.lineTo(200, 280); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#1e40af'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(90, 180); ctx.lineTo(165, 225); ctx.lineTo(180, 270); ctx.lineTo(200, 280); ctx.lineTo(190, 240); ctx.lineTo(160, 170); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(250, 110); ctx.lineTo(310, 180); ctx.lineTo(235, 225); ctx.lineTo(220, 270); ctx.lineTo(200, 280); ctx.lineTo(210, 240); ctx.lineTo(240, 170); ctx.closePath(); ctx.fill();
+    } else if (suitId === 'suit3') {
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(140, 105); ctx.lineTo(45, 170); ctx.lineTo(15, 400); ctx.lineTo(385, 400); ctx.lineTo(355, 170); ctx.lineTo(260, 105); ctx.lineTo(225, 230); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#cbd5e1'; ctx.stroke();
+      ctx.fillStyle = '#f8fafc'; ctx.fillRect(188, 160, 24, 240);
+      ctx.beginPath(); ctx.moveTo(140, 105); ctx.lineTo(190, 165); ctx.lineTo(175, 185); ctx.lineTo(130, 120); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(260, 105); ctx.lineTo(210, 165); ctx.lineTo(225, 185); ctx.lineTo(270, 120); ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else if (suitId === 'suit4') {
+      ctx.fillStyle = '#f8fafc'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(255, 115); ctx.lineTo(210, 260); ctx.lineTo(190, 260); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#1e293b'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(45, 165); ctx.lineTo(20, 400); ctx.lineTo(380, 400); ctx.lineTo(355, 165); ctx.lineTo(255, 115); ctx.lineTo(220, 240); ctx.lineTo(180, 240); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#334155'; ctx.beginPath(); ctx.moveTo(145, 115); ctx.lineTo(95, 185); ctx.lineTo(170, 225); ctx.lineTo(185, 280); ctx.lineTo(200, 290); ctx.lineTo(190, 245); ctx.lineTo(160, 175); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(255, 115); ctx.lineTo(305, 185); ctx.lineTo(230, 225); ctx.lineTo(215, 280); ctx.lineTo(200, 290); ctx.lineTo(210, 245); ctx.lineTo(240, 175); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = '#f8fafc'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(250, 110); ctx.lineTo(215, 280); ctx.lineTo(185, 280); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#b91c1c'; ctx.beginPath(); ctx.moveTo(190, 140); ctx.lineTo(210, 140); ctx.lineTo(216, 165); ctx.lineTo(184, 165); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#991b1b'; ctx.beginPath(); ctx.moveTo(186, 165); ctx.lineTo(214, 165); ctx.lineTo(220, 340); ctx.lineTo(200, 375); ctx.lineTo(180, 340); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#0f172a'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(40, 165); ctx.lineTo(10, 400); ctx.lineTo(390, 400); ctx.lineTo(360, 165); ctx.lineTo(250, 110); ctx.lineTo(225, 230); ctx.lineTo(200, 280); ctx.lineTo(175, 230); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#1e293b'; ctx.beginPath(); ctx.moveTo(150, 110); ctx.lineTo(90, 180); ctx.lineTo(165, 225); ctx.lineTo(180, 270); ctx.lineTo(200, 280); ctx.lineTo(190, 240); ctx.lineTo(160, 170); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(250, 110); ctx.lineTo(310, 180); ctx.lineTo(235, 225); ctx.lineTo(220, 270); ctx.lineTo(200, 280); ctx.lineTo(210, 240); ctx.lineTo(240, 170); ctx.closePath(); ctx.fill();
+    }
+  }
+
+  function drawDressCanvas() {
+    const canvas = $('dressCanvas');
+    if (!canvas || !modalPhotoImg.width) return;
+    const ctx = canvas.getContext('2d');
+    const pw = modalPhotoImg.width;
+    const ph = modalPhotoImg.height;
+    canvas.width = pw;
+    canvas.height = ph;
+    ctx.clearRect(0, 0, pw, ph);
+    ctx.drawImage(modalPhotoImg, 0, 0);
+
+    const zoom = (+$('mDressZoom').value) / 100;
+    const ox = (+$('mDressOx').value) / 100;
+    const oy = (+$('mDressOy').value) / 100;
+
+    $('lblDressZoom').innerText = Math.round(zoom * 100) + '%';
+    $('lblDressOx').innerText = $('mDressOx').value;
+    $('lblDressOy').innerText = $('mDressOy').value;
+
+    const sw = pw * 1.05 * zoom;
+    const sh = ph * 0.9 * zoom;
+    const sx = (pw - sw) / 2 + ox * (pw / 2);
+    const sy = ph * 0.45 + oy * (ph / 2);
+
+    ctx.drawImage(modalSuitImg, sx, sy, sw, sh);
+  }
+
+  ['mDressZoom', 'mDressOx', 'mDressOy'].forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('input', drawDressCanvas);
+  });
+
+  const suitSelBox = $('modalSuitSelector');
+  if (suitSelBox) {
+    suitSelBox.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-suit]');
+      if (!b) return;
+      loadSuitImage(b.dataset.suit);
+      document.querySelectorAll('#modalSuitSelector .modal-suit-btn').forEach(btn => {
+        const on = btn.dataset.suit === b.dataset.suit;
+        btn.classList.toggle('border-pink-600', on);
+        btn.classList.toggle('bg-pink-50', on);
+        btn.classList.toggle('border-gray-200', !on);
+        btn.classList.toggle('bg-gray-50', !on);
+      });
+    });
+  }
+
+  window.applyDressToPhoto = async function() {
+    if (!uploadedFile) return;
+    const btn = $('btnSaveDress');
+    btn.disabled = true;
+    btn.innerText = 'পোশাক যুক্ত হচ্ছে...';
+
+    const zoom = (+$('mDressZoom').value) / 100;
+    const ox = (+$('mDressOx').value) / 100;
+    const oy = (+$('mDressOy').value) / 100;
+
+    try {
+      const res = await fetch('/api/image/apply-suit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          suit_id: selectedModalSuit,
+          zoom: zoom,
+          ox: ox,
+          oy: oy
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeDressModal();
+        if (currentMode === 'studio') scheduleStudio();
+        alert('✓ ছবিতে সফলভাবে ফরমাল ড্রেস যুক্ত করা হয়েছে!');
+      } else {
+        alert('ড্রেস যুক্ত করা ব্যর্থ হয়েছে: ' + (data.detail || ''));
+      }
+    } catch (e) {
+      alert('সার্ভার এরর: ' + e);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>✓</span> <span>পোশাক যুক্ত করুন</span>';
+    }
+  };
+
+  // ── Button triggers for header bar ──
   const btnCropTrigger = $('btnOpenCrop');
   if (btnCropTrigger) btnCropTrigger.addEventListener('click', window.openCropModal);
   const btnCamTrigger = $('btnOpenCamScan');
   if (btnCamTrigger) btnCamTrigger.addEventListener('click', window.openCamscanModal);
+  const btnRbgTrigger = $('btnOpenRemoveBg');
+  if (btnRbgTrigger) btnRbgTrigger.addEventListener('click', window.openRemoveBgModal);
+  const btnDressTrigger = $('btnOpenDress');
+  if (btnDressTrigger) btnDressTrigger.addEventListener('click', window.openDressModal);
 
   // ── Rotate File Logic (Image / PDF 90° clockwise) ──
-  async function rotateFile() {
+  async function rotateFile(showAlert = true) {
     if (!uploadedFile) return;
     const btn = $('btnRotateFile');
     if (btn) btn.disabled = true;
@@ -902,22 +1218,42 @@
         if (currentMode === 'studio') {
           scheduleStudio();
         } else {
-          // Refresh inline preview if present
           if (uploadedFile.is_nid) refreshNidInline();
         }
-        alert('ফাইল সফলভাবে ৯০° ঘোরানো হয়েছে!');
+        if (showAlert) alert('✓ ফাইল সফলভাবে ৯০° ঘোরানো হয়েছে!');
       } else {
-        alert('ঘোরানো ব্যর্থ হয়েছে: ' + (data.detail || ''));
+        if (showAlert) alert('ঘোরানো ব্যর্থ হয়েছে: ' + (data.detail || ''));
       }
     } catch (e) {
-      alert('সার্ভার এরর: ' + e);
+      if (showAlert) alert('সার্ভার এরর: ' + e);
     } finally {
       if (btn) btn.disabled = false;
     }
   }
 
   const btnRotTrigger = $('btnRotateFile');
-  if (btnRotTrigger) btnRotTrigger.addEventListener('click', rotateFile);
+  if (btnRotTrigger) btnRotTrigger.addEventListener('click', () => rotateFile(true));
+
+  // ── Print Preview toolbar listeners ──
+  const btnPrevRot = $('btnPreviewRotate');
+  if (btnPrevRot) {
+    btnPrevRot.addEventListener('click', async () => {
+      btnPrevRot.disabled = true;
+      await rotateFile(false);
+      btnPrevRot.disabled = false;
+      openPrintPreview();
+    });
+  }
+
+  const btnPrevToggle = $('btnPreviewToggleOrient');
+  if (btnPrevToggle) {
+    btnPrevToggle.addEventListener('click', () => {
+      const cur = checked('orientation') || 'portrait';
+      const target = cur === 'landscape' ? 'portrait' : 'landscape';
+      selectRadio(target === 'landscape' ? 'optLandscape' : 'optPortrait');
+      openPrintPreview();
+    });
+  }
 
   // ── Orientation selection (Portrait vs Landscape) ──
   ['optPortrait', 'optLandscape'].forEach(id => {

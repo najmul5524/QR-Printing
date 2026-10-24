@@ -11,6 +11,8 @@
     .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   </style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen pb-16">
 
@@ -114,17 +116,23 @@
             <p class="text-xs text-pink-600 font-semibold" id="fileMetaText">মোট পেজ: ১</p>
           </div>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-          <button type="button" id="btnRotateFile" class="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ফাইল ৯০° ঘোরান">
+        <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+          <button type="button" id="btnRotateFile" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ফাইল ৯০° ঘোরান">
             <span>↻</span> <span>ঘোরান</span>
           </button>
-          <button type="button" id="btnOpenCrop" class="hidden px-2.5 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ছবি ক্রপ করুন">
+          <button type="button" id="btnOpenCrop" class="hidden px-2 py-1 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ছবি ক্রপ করুন">
             <span>✂️</span> <span>ক্রপ</span>
           </button>
-          <button type="button" id="btnOpenCamScan" class="hidden px-2.5 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ক্যামস্ক্যানার ইফেক্ট">
+          <button type="button" id="btnOpenCamScan" class="hidden px-2 py-1 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ক্যামস্ক্যানার ইফেক্ট">
             <span>📄</span> <span>স্ক্যানার</span>
           </button>
-          <button type="button" id="btnOpenPreview" class="px-2.5 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition">
+          <button type="button" id="btnOpenRemoveBg" class="hidden px-2 py-1 bg-purple-50 border border-purple-200 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ব্যাকগ্রাউন্ড রিমুভ">
+            <span>🎨</span> <span>রিমুভ BG</span>
+          </button>
+          <button type="button" id="btnOpenDress" class="hidden px-2 py-1 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ড্রেস পরিবর্তন">
+            <span>👔</span> <span>ড্রেস</span>
+          </button>
+          <button type="button" id="btnOpenPreview" class="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm transition">
             <span>👁️</span> <span>প্রিভিউ</span>
           </button>
           <button type="button" id="btnRemoveFile" class="text-gray-400 hover:text-red-500 p-1 text-lg font-bold" title="মুছে ফেলুন">&times;</button>
@@ -589,11 +597,21 @@
           <button type="button" id="btnClosePreviewModal" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1">&times;</button>
         </div>
 
-        <div class="bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 px-4 py-2 text-xs flex items-center justify-between gap-2">
+        <div class="bg-gradient-to-r from-pink-50 to-orange-50 border-b border-pink-100 px-4 py-2 text-xs flex items-center justify-between gap-2 flex-wrap">
           <div class="flex items-center gap-1.5 text-pink-900 font-bold">
             <span>📐</span> <span id="previewDimensionText"></span>
           </div>
-          <div class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700 shrink-0" id="previewModeBadge">রঙিন (Color)</div>
+          <div class="flex items-center gap-2">
+            <!-- 90 deg rotate in preview -->
+            <button type="button" id="btnPreviewRotate" class="px-2.5 py-1 bg-white hover:bg-gray-100 border rounded-lg text-xs font-bold text-gray-700 flex items-center gap-1 shadow-sm" title="ছবি ৯০° ঘোরান">
+              <span>↻</span> <span>৯০° ঘোরান</span>
+            </button>
+            <!-- Orientation toggle in preview -->
+            <button type="button" id="btnPreviewToggleOrient" class="px-2.5 py-1 bg-white hover:bg-gray-100 border rounded-lg text-xs font-bold text-gray-700 flex items-center gap-1 shadow-sm" title="Landscape / Portrait পরিবর্তন">
+              <span id="previewOrientIcon">🖥️</span> <span id="previewOrientText">Landscape করুন</span>
+            </button>
+            <div class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700 shrink-0" id="previewModeBadge">রঙিন (Color)</div>
+          </div>
         </div>
 
         <div class="flex-1 overflow-auto p-3 bg-gray-200 min-h-[320px]" id="previewScroll">
@@ -661,33 +679,160 @@
     </div>
 
   
-    <!-- Individual Crop Modal Dialog -->
-    <div id="cropModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
+    <!-- Individual Crop Modal with Cropper.js -->
+    <div id="cropModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
       <div class="bg-white max-w-lg w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border">
         <div class="px-4 py-3 bg-gray-900 text-white flex items-center justify-between">
-          <h3 class="font-bold text-sm flex items-center gap-2"><span>✂️</span> <span>ছবি ক্রপ করুন (Crop Tool)</span></h3>
+          <h3 class="font-bold text-sm flex items-center gap-2"><span>✂️</span> <span>ছবি ক্রপ করুন (Cropper Tool)</span></h3>
           <button type="button" onclick="closeCropModal()" class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
         </div>
-        <div class="p-4 space-y-3">
-          <div class="relative bg-gray-900 rounded-xl overflow-hidden flex items-center justify-center max-h-[380px]" id="cropContainer">
-            <img id="cropImgTarget" src="" class="max-h-[360px] max-w-full select-none" alt="Crop target">
-            <!-- Crop overlay box -->
-            <div id="cropBox" class="absolute border-2 border-pink-500 bg-pink-500/20 cursor-move" style="top:10%; left:10%; width:80%; height:80%;">
-              <div class="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-pink-600 rounded-full"></div>
-              <div class="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-pink-600 rounded-full"></div>
-              <div class="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-pink-600 rounded-full"></div>
-              <div class="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-pink-600 rounded-full"></div>
-            </div>
+        <div class="p-3 space-y-3">
+          <div class="relative bg-gray-950 rounded-xl overflow-hidden flex items-center justify-center h-[360px] max-h-[50vh]" id="cropContainer">
+            <img id="cropImgTarget" src="" class="max-h-full max-w-full block" alt="Crop target">
           </div>
-          <div class="flex gap-2">
-            <button type="button" onclick="setCropRatio('free')" class="flex-1 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg">ফ্রি সাইজ</button>
-            <button type="button" onclick="setCropRatio('passport')" class="flex-1 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 text-xs font-bold rounded-lg border border-pink-200">পাসপোর্ট রেশিও</button>
-            <button type="button" onclick="setCropRatio('square')" class="flex-1 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg">১:১ স্কয়ার</button>
+          <!-- Aspect ratio and action buttons -->
+          <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-center text-xs">
+            <button type="button" onclick="setCropRatio('free')" id="cropBtnFree" class="crop-ratio-btn py-1.5 px-2 bg-pink-600 text-white font-bold rounded-lg shadow-sm">ফ্রি সাইজ</button>
+            <button type="button" onclick="setCropRatio('passport')" id="cropBtnPassport" class="crop-ratio-btn py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg">পাসপোর্ট (৩৫×৪৫)</button>
+            <button type="button" onclick="setCropRatio('stamp')" id="cropBtnStamp" class="crop-ratio-btn py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg">স্ট্যাম্প (২০×২৫)</button>
+            <button type="button" onclick="setCropRatio('square')" id="cropBtnSquare" class="crop-ratio-btn py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg">১:১ স্কয়ার</button>
+            <button type="button" onclick="setCropRatio('4x6')" id="cropBtn4x6" class="crop-ratio-btn py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg">৪×৬ রেশিও</button>
+            <button type="button" onclick="rotateCropper(90)" class="py-1.5 px-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg flex items-center justify-center gap-1">↻ ৯০°</button>
           </div>
         </div>
         <div class="p-3 bg-gray-50 border-t flex justify-end gap-2">
           <button type="button" onclick="closeCropModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বাতিল</button>
-          <button type="button" onclick="applyCrop()" class="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-bold shadow">✓ ক্রপ সম্পন্ন করুন</button>
+          <button type="button" id="btnSaveCrop" onclick="applyCrop()" class="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
+            <span>✓</span> <span>ক্রপ সম্পন্ন করুন</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Remove Background Modal (remove.bg integration & web bridge) -->
+    <div id="removeBgModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
+      <div class="bg-white max-w-md w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border">
+        <div class="px-4 py-3 bg-gradient-to-r from-purple-700 to-indigo-800 text-white flex items-center justify-between">
+          <h3 class="font-bold text-sm flex items-center gap-2"><span>🎨</span> <span>ব্যাকগ্রাউন্ড রিমুভ ও পরিবর্তন (Remove.bg)</span></h3>
+          <button type="button" onclick="closeRemoveBgModal()" class="text-white hover:opacity-80 text-2xl leading-none">&times;</button>
+        </div>
+        <div class="p-4 space-y-4">
+          <!-- Background Color Choice -->
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1.5">১. ব্যাকগ্রাউন্ড রঙ বেছে নিন</label>
+            <div class="flex flex-wrap gap-2 items-center" id="removeBgColorBtns">
+              <button type="button" data-bg="#ffffff" class="rbg-color-btn px-2.5 py-1.5 rounded-lg border-2 border-purple-600 bg-purple-50 text-xs font-bold flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full border bg-white inline-block"></span> <span>সাদা (White)</span>
+              </button>
+              <button type="button" data-bg="#1e5bb8" class="rbg-color-btn px-2.5 py-1.5 rounded-lg border-2 border-gray-200 hover:border-purple-400 text-xs font-bold flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full bg-blue-600 inline-block"></span> <span>পাসপোর্ট ব্লু</span>
+              </button>
+              <button type="button" data-bg="#d32f2f" class="rbg-color-btn px-2.5 py-1.5 rounded-lg border-2 border-gray-200 hover:border-purple-400 text-xs font-bold flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full bg-red-600 inline-block"></span> <span>লাল</span>
+              </button>
+              <button type="button" data-bg="#d9d9d9" class="rbg-color-btn px-2.5 py-1.5 rounded-lg border-2 border-gray-200 hover:border-purple-400 text-xs font-bold flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full bg-gray-300 inline-block"></span> <span>ধূসর</span>
+              </button>
+              <button type="button" data-bg="transparent" class="rbg-color-btn px-2.5 py-1.5 rounded-lg border-2 border-gray-200 hover:border-purple-400 text-xs font-bold flex items-center gap-1.5">
+                <span>🏁</span> <span>স্বচ্ছ (PNG)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Instant AI Action -->
+          <div class="p-3 bg-purple-50/60 rounded-xl border border-purple-200 space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-purple-900">২. এই সাইটের AI দিয়ে অটো রিমুভ</span>
+              <span class="text-[10px] text-purple-600 font-semibold">1-Click AI</span>
+            </div>
+            <p class="text-[11px] text-gray-600">দোকানের remove.bg API অথবা হাই-অ্যাকিউরেসি এআই ইঞ্জিন দিয়ে সরাসরি পেছনের ব্যাকগ্রাউন্ড মুছে নতুন রঙ বসাবে।</p>
+            <button type="button" id="btnRunRemoveBg" onclick="runRemoveBgAI()" class="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:opacity-95 flex items-center justify-center gap-2">
+              <span>✨</span> <span id="runRemoveBgText">ব্যাকগ্রাউন্ড রিমুভ ও রঙ পরিবর্তন করুন</span>
+            </button>
+          </div>
+
+          <!-- Direct Remove.bg Website Integration / Bridge -->
+          <div class="p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-gray-800">🌐 remove.bg ওয়েবসাইটের সাথে লিংক</span>
+              <span class="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-bold">অফিসিয়াল সাইট</span>
+            </div>
+            <p class="text-[11px] text-gray-500">
+              আপনি চাইলে সরাসরি remove.bg সাইটে গিয়ে ম্যানুয়াল ব্রাশ দিয়ে ব্যাকগ্রাউন্ড কাটতে পারেন:
+            </p>
+            <div class="flex gap-2">
+              <a href="https://www.remove.bg/upload" target="_blank" class="flex-1 py-2 bg-gray-900 hover:bg-black text-white text-center font-bold rounded-lg text-xs flex items-center justify-center gap-1">
+                <span>🌐</span> <span>remove.bg সাইট ওপেন করুন</span>
+              </a>
+            </div>
+            <div class="pt-2 border-t">
+              <label class="block font-semibold text-gray-700 mb-1">📥 remove.bg থেকে ডাউনলোড করা ছবি দিন:</label>
+              <input type="file" id="cutoutFileInput" accept="image/png,image/jpeg,image/webp" class="w-full text-xs file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-purple-100 file:text-purple-700 hover:file:bg-purple-200">
+            </div>
+          </div>
+        </div>
+        <div class="p-3 bg-gray-50 border-t flex justify-end">
+          <button type="button" onclick="closeRemoveBgModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বন্ধ করুন</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dress / Formal Suit Change Modal -->
+    <div id="dressModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 hidden">
+      <div class="bg-white max-w-lg w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border">
+        <div class="px-4 py-3 bg-gradient-to-r from-amber-600 to-orange-700 text-white flex items-center justify-between">
+          <h3 class="font-bold text-sm flex items-center gap-2"><span>👔</span> <span>ড্রেস / ফরমাল স্যুট পরিবর্তন (Dress Change)</span></h3>
+          <button type="button" onclick="closeDressModal()" class="text-white hover:opacity-80 text-2xl leading-none">&times;</button>
+        </div>
+        <div class="p-4 space-y-3">
+          <!-- Live Preview Canvas -->
+          <div class="relative bg-gray-900 rounded-xl overflow-hidden flex items-center justify-center h-[260px] max-h-[38vh]" id="dressPreviewWrap">
+            <canvas id="dressCanvas" class="max-h-full max-w-full rounded shadow border bg-white"></canvas>
+          </div>
+
+          <!-- Suit Selector -->
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1.5">পোশাকের মডেল বেছে নিন:</label>
+            <div class="grid grid-cols-4 gap-2" id="modalSuitSelector">
+              <button type="button" data-suit="suit1" class="modal-suit-btn border-2 border-pink-600 bg-pink-50 p-2 rounded-xl text-center text-xs font-bold">
+                <span class="text-xl block">🤵</span> ব্ল্যাক স্যুট + টাই
+              </button>
+              <button type="button" data-suit="suit2" class="modal-suit-btn border-2 border-gray-200 p-2 rounded-xl text-center text-xs font-bold hover:border-pink-500 bg-gray-50">
+                <span class="text-xl block">👔</span> নেভি স্যুট + টাই
+              </button>
+              <button type="button" data-suit="suit3" class="modal-suit-btn border-2 border-gray-200 p-2 rounded-xl text-center text-xs font-bold hover:border-pink-500 bg-gray-50">
+                <span class="text-xl block">👕</span> সাদা ফরমাল শার্ট
+              </button>
+              <button type="button" data-suit="suit4" class="modal-suit-btn border-2 border-gray-200 p-2 rounded-xl text-center text-xs font-bold hover:border-pink-500 bg-gray-50">
+                <span class="text-xl block">🧥</span> চারকোল ব্লেজার
+              </button>
+            </div>
+          </div>
+
+          <!-- Alignment & Size Sliders -->
+          <div class="bg-gray-50 p-3 rounded-xl border space-y-2 text-xs">
+            <p class="font-bold text-gray-700">স্যুটের সাইজ ও গলার সাথে অবস্থান মেলান:</p>
+            <div class="grid grid-cols-3 gap-3">
+              <div>
+                <div class="flex justify-between text-[11px] text-gray-500 mb-0.5"><span>সাইজ (Zoom)</span><span id="lblDressZoom">100%</span></div>
+                <input type="range" id="mDressZoom" min="60" max="150" value="100" class="w-full accent-amber-600">
+              </div>
+              <div>
+                <div class="flex justify-between text-[11px] text-gray-500 mb-0.5"><span>↔ ডানে/বামে</span><span id="lblDressOx">0</span></div>
+                <input type="range" id="mDressOx" min="-60" max="60" value="0" class="w-full accent-amber-600">
+              </div>
+              <div>
+                <div class="flex justify-between text-[11px] text-gray-500 mb-0.5"><span>↕ উপরে/নিচে</span><span id="lblDressOy">0</span></div>
+                <input type="range" id="mDressOy" min="-60" max="60" value="0" class="w-full accent-amber-600">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="p-3 bg-gray-50 border-t flex justify-end gap-2">
+          <button type="button" onclick="closeDressModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বাতিল</button>
+          <button type="button" id="btnSaveDress" onclick="applyDressToPhoto()" class="px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
+            <span>✓</span> <span>পোশাক যুক্ত করুন</span>
+          </button>
         </div>
       </div>
     </div>

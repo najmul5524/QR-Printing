@@ -278,14 +278,18 @@ def _to_jpeg(img: Image.Image, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
-def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: str = "color") -> bytes:
+def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: str = "color", orientation: str = "portrait") -> bytes:
     """What a single image will look like on the paper."""
     if paper_size == "4x6":
         sheet = build_passport_sheet(image_path, 6, color_mode)
         sheet = sheet.resize((1000, int(sheet.height * 1000 / sheet.width)), Image.Resampling.LANCZOS)
         return _to_jpeg(sheet)
 
-    page_w, page_h = 827, 1169  # A4 @ 100 DPI
+    if orientation == "landscape":
+        page_w, page_h = 1169, 827  # A4 Landscape @ 100 DPI
+    else:
+        page_w, page_h = 827, 1169  # A4 Portrait @ 100 DPI
+
     page = Image.new("RGB", (page_w, page_h), "white")
     with Image.open(image_path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
@@ -296,7 +300,7 @@ def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: st
     return _to_jpeg(page)
 
 
-def render_pdf_page_preview(pdf_path: str, page_index: int, color_mode: str = "color", dpi: int = 100) -> bytes:
+def render_pdf_page_preview(pdf_path: str, page_index: int, color_mode: str = "color", dpi: int = 100, orientation: str = "portrait") -> bytes:
     if _fitz is None:
         raise RuntimeError("PDF renderer not available")
     doc = _fitz.open(pdf_path)
@@ -307,6 +311,8 @@ def render_pdf_page_preview(pdf_path: str, page_index: int, color_mode: str = "c
             raise IndexError("page out of range")
         pix = doc[page_index].get_pixmap(dpi=dpi, alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        if orientation == "landscape" and img.height > img.width:
+            img = img.rotate(90, expand=True)
     finally:
         doc.close()
     return _to_jpeg(_apply_color_mode(img, color_mode))
