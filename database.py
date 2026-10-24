@@ -471,6 +471,30 @@ def get_shop_printers(shop_id: int) -> List[Dict[str, Any]]:
         "SELECT * FROM printers WHERE shop_id = ? ORDER BY is_online DESC, id ASC",
         (shop_id,)
     ).fetchall()
+    default_names = {p[0] for p in DEFAULT_SHOP_PRINTERS}
+    has_real = any(r["printer_name"] not in default_names for r in rows)
+
+    # If this shop only has placeholder printers, check if an agent synced real PC printers to any shop
+    if not has_real:
+        global_real = conn.execute(
+            "SELECT DISTINCT printer_name, printer_type FROM printers WHERE printer_name NOT IN (?, ?) ORDER BY id ASC",
+            tuple(default_names)
+        ).fetchall()
+        if global_real:
+            for p_name in default_names:
+                conn.execute("DELETE FROM printers WHERE shop_id = ? AND printer_name = ?", (shop_id, p_name))
+            now = datetime.now().isoformat()
+            for gr in global_real:
+                conn.execute(
+                    "INSERT INTO printers (shop_id, printer_name, printer_type, is_online, last_seen) VALUES (?, ?, ?, 1, ?)",
+                    (shop_id, gr["printer_name"], gr["printer_type"] or "all", now)
+                )
+            conn.commit()
+            rows = conn.execute(
+                "SELECT * FROM printers WHERE shop_id = ? ORDER BY is_online DESC, id ASC",
+                (shop_id,)
+            ).fetchall()
+
     if not rows:
         now = datetime.now().isoformat()
         for p_name, p_type in DEFAULT_SHOP_PRINTERS:
@@ -520,12 +544,13 @@ def sync_agent_printers(shop_id: int, printer_names: List[str]):
         return
     conn = get_db()
     now = datetime.now().isoformat()
+    # Remove initial placeholder printers once real PC printers are synced
+    for p_name, _ in DEFAULT_SHOP_PRINTERS:
+        conn.execute("DELETE FROM printers WHERE shop_id = ? AND printer_name = ?", (shop_id, p_name))
+
     for raw_name in printer_names:
         name = str(raw_name or "").strip()[:100]
         if not name:
-            continue
-        # Skip virtual OS printers unless they are the only ones
-        if any(skip in name.lower() for skip in ("onenote", "fax", "xps document writer")):
             continue
         existing = conn.execute(
             "SELECT id FROM printers WHERE shop_id = ? AND LOWER(printer_name) = LOWER(?)",

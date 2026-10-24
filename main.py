@@ -593,6 +593,14 @@ def admin_preview_order_sheet(
         return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/admin/printers")
+async def admin_get_printers(request: Request):
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"printers": db.get_shop_printers(shop["id"])}
+
+
 @app.post("/admin/printers/add")
 async def admin_add_printer(request: Request):
     shop = get_current_shop(request)

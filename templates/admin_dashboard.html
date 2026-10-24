@@ -525,10 +525,11 @@
       } else if (msg.event === 'AGENT_STATUS') {
         updateAgentUI(msg.online);
       } else if (msg.event === 'PRINTERS_SYNCED' && Array.isArray(msg.printers)) {
-        SHOP_PRINTERS = msg.printers;
+        populateAllPrinterDropdowns(msg.printers);
       } else if (msg.event === 'NEW_TRANSFER') {
         playChime();
         loadTransfers();
+    fetchLatestPrinters();
       }
     };
 
@@ -566,6 +567,51 @@
       }
     }
 
+    function populateAllPrinterDropdowns(printersList, forceEditValue = null) {
+      if (Array.isArray(printersList)) {
+        SHOP_PRINTERS = printersList;
+      }
+      const list = SHOP_PRINTERS || [];
+
+      // 1. Update #editPrinterTarget inside the modal
+      const editSel = document.getElementById('editPrinterTarget');
+      if (editSel) {
+        const prevVal = forceEditValue !== null ? forceEditValue : editSel.value;
+        editSel.innerHTML = '<option value="">⚡ অটো / ডিফল্ট প্রিন্টার (দোকানের মূল প্রিন্টার)</option>';
+        list.forEach(p => {
+          ensurePrinterOptionExists(editSel, p.printer_name);
+        });
+        if (prevVal) {
+          ensurePrinterOptionExists(editSel, prevVal);
+          editSel.value = prevVal;
+        }
+      }
+
+      // 2. Update all #rowPrinter-* dropdowns in the orders table
+      document.querySelectorAll('select[id^="rowPrinter-"]').forEach(rowSel => {
+        const prevRowVal = rowSel.value;
+        rowSel.innerHTML = '<option value="">🖨️ ডিফল্ট প্রিন্টার (অটো)</option>';
+        list.forEach(p => {
+          ensurePrinterOptionExists(rowSel, p.printer_name);
+        });
+        if (prevRowVal) {
+          ensurePrinterOptionExists(rowSel, prevRowVal);
+          rowSel.value = prevRowVal;
+        }
+      });
+    }
+
+    async function fetchLatestPrinters(activePrinter = null) {
+      try {
+        const res = await fetch('/admin/printers?t=' + Date.now());
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.printers)) {
+          populateAllPrinterDropdowns(data.printers, activePrinter);
+        }
+      } catch (e) {}
+    }
+
     async function addNewPrinterOption() {
       const inp = document.getElementById('newPrinterNameInput');
       const name = (inp.value || '').trim();
@@ -578,10 +624,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          SHOP_PRINTERS = data.printers || SHOP_PRINTERS;
-          const sel = document.getElementById('editPrinterTarget');
-          ensurePrinterOptionExists(sel, name);
-          sel.value = name;
+          populateAllPrinterDropdowns(data.printers || SHOP_PRINTERS, name);
           inp.value = '';
           refreshAdminEditPreview();
         }
@@ -679,11 +722,10 @@
       document.getElementById('editOrientation').value = order.orientation || 'portrait';
       document.getElementById('editTotalPrice').value = order.total_price || 0;
 
-      const sel = document.getElementById('editPrinterTarget');
       const rowSel = document.getElementById(`rowPrinter-${order.id}`);
       const activePrinter = (rowSel ? rowSel.value : order.printer_target) || '';
-      ensurePrinterOptionExists(sel, activePrinter);
-      sel.value = activePrinter;
+      populateAllPrinterDropdowns(SHOP_PRINTERS, activePrinter);
+      fetchLatestPrinters(activePrinter);
 
       document.getElementById('editOrderModal').classList.remove('hidden');
       refreshAdminEditPreview();
