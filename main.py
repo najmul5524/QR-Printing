@@ -660,14 +660,15 @@ async def upload_nid_card(front: UploadFile = File(...), back: UploadFile = File
 
 
 @app.get("/api/nid-preview/{token}")
-def nid_preview(token: str, color: str = "color", fit: str = "cover", rf: int = 0, rb: int = 0, w: int = 900):
+def nid_preview(token: str, color: str = "color", fit: str = "cover", rf: int = 0, rb: int = 0, w: int = 800, orientation: str = "portrait"):
     """Exact print preview of the A4 sheet that will be printed (front + back at real NID size)."""
     front, back = nid_paths(token)
     data = utils.nid_preview_jpeg(
         front, back, width=max(400, min(w, 1400)),
         color_mode=clean_choice(color, ("color", "bw"), "color"),
         fit_mode=clean_choice(fit, ("cover", "contain"), "cover"),
-        rot_front=clean_rotation(rf), rot_back=clean_rotation(rb)
+        rot_front=clean_rotation(rf), rot_back=clean_rotation(rb),
+        orientation=clean_choice(orientation, ("portrait", "landscape"), "portrait")
     )
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
@@ -1152,6 +1153,7 @@ async def customer_create_order(request: Request):
             fit_mode=clean_choice(data.get("nid_fit"), ("cover", "contain"), "cover"),
             rot_front=clean_rotation(data.get("nid_rot_front")),
             rot_back=clean_rotation(data.get("nid_rot_back")),
+            orientation=orientation,
         )
         utils.secure_delete_file(front)
         utils.secure_delete_file(back)
@@ -1200,7 +1202,13 @@ async def customer_create_order(request: Request):
             page_count = 1
             total_price = shop["rate_photo_4x6"] * copies
         else:
-            if pages_per_sheet in (2, 4) and file_type == "pdf":
+            if file_type == "image":
+                a4_path = os.path.join(UPLOAD_DIR, f"a4_{orientation}_{os.path.splitext(file_id)[0]}.jpg")
+                await asyncio.to_thread(utils.save_a4_image_sheet, file_path, a4_path, color_mode, orientation)
+                if a4_path != file_path:
+                    utils.secure_delete_file(file_path)
+                file_path = a4_path
+            elif pages_per_sheet in (2, 4) and file_type == "pdf":
                 nup_path = os.path.join(UPLOAD_DIR, f"nup{pages_per_sheet}_{file_id}")
                 nup_path, new_sheet_count = await asyncio.to_thread(utils.create_nup_pdf, file_path, nup_path, pages_per_sheet)
                 if nup_path != file_path:

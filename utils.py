@@ -185,13 +185,48 @@ def build_nid_sheet(
     fit_mode: str = "cover",
     rot_front: int = 0,
     rot_back: int = 0,
+    orientation: str = "portrait",
 ) -> Image.Image:
     """
-    A4 page (300 DPI) with the FRONT and BACK placed one below the other, each at the
+    A4 page (300 DPI) in Portrait or Landscape with the FRONT and BACK placed at the
     exact Smart-NID / ID-1 size of 85.60 mm x 53.98 mm, with cut guides and a 50 mm
     scale ruler so the shopkeeper can verify the print is at 100 %.
-    Only ASCII text is drawn on the paper (the default PIL font has no Bengali glyphs).
     """
+    front = _prepare_card(front_path, rot_front, fit_mode, color_mode)
+    back = _prepare_card(back_path, rot_back, fit_mode, color_mode)
+    f_title, f_label, f_small = _font(40), _font(32), _font(26)
+    margin = 24
+
+    if orientation == "landscape":
+        sheet = Image.new("RGB", (A4_H, A4_W), "white")
+        draw = ImageDraw.Draw(sheet)
+        gap = 180
+        total_w = NID_W * 2 + gap
+        x_front = (A4_H - total_w) // 2
+        x_back = x_front + NID_W + gap
+        y_card = 420
+
+        sheet.paste(front, (x_front, y_card))
+        sheet.paste(back, (x_back, y_card))
+
+        for cx in (x_front, x_back):
+            draw.rectangle([cx, y_card, cx + NID_W - 1, y_card + NID_H - 1], outline="#6b7280", width=1)
+            _dashed_rect(draw, cx - margin, y_card - margin, cx + NID_W + margin, y_card + NID_H + margin)
+
+        draw.text((x_front, 160), f"ID / NID CARD (LANDSCAPE A4) - ACTUAL SIZE {NID_W_MM:.1f} x {NID_H_MM:.1f} mm", fill="#111827", font=f_title)
+        draw.text((x_front, 225), "Print at 100% (Actual size / No scaling). Cut along the dashed lines.", fill="#4b5563", font=f_small)
+        draw.text((x_front, y_card - 70), "FRONT", fill="#374151", font=f_label)
+        draw.text((x_back, y_card - 70), "BACK", fill="#374151", font=f_label)
+
+        ruler_y = y_card + NID_H + 260
+        ruler_len = mm_to_px(50)
+        draw.line([(x_front, ruler_y), (x_front + ruler_len, ruler_y)], fill="#111827", width=3)
+        for mm in range(0, 51, 10):
+            tx = x_front + mm_to_px(mm)
+            draw.line([(tx, ruler_y - 14), (tx, ruler_y + 14)], fill="#111827", width=3)
+        draw.text((x_front, ruler_y + 30), "Scale check: this line must measure exactly 50 mm.", fill="#4b5563", font=f_small)
+        return sheet
+
     sheet = Image.new("RGB", (A4_W, A4_H), "white")
     draw = ImageDraw.Draw(sheet)
 
@@ -200,8 +235,6 @@ def build_nid_sheet(
     gap = 170
     y_back = y_front + NID_H + gap
 
-    front = _prepare_card(front_path, rot_front, fit_mode, color_mode)
-    back = _prepare_card(back_path, rot_back, fit_mode, color_mode)
     sheet.paste(front, (x, y_front))
     sheet.paste(back, (x, y_back))
 
@@ -209,13 +242,11 @@ def build_nid_sheet(
     for y in (y_front, y_back):
         draw.rectangle([x, y, x + NID_W - 1, y + NID_H - 1], outline="#6b7280", width=1)
 
-    f_title, f_label, f_small = _font(40), _font(32), _font(26)
     draw.text((x - 24, 150), f"ID / NID CARD - ACTUAL SIZE {NID_W_MM:.1f} x {NID_H_MM:.1f} mm", fill="#111827", font=f_title)
     draw.text((x - 24, 215), "Print at 100% (Actual size / No scaling). Cut along the dashed lines.", fill="#4b5563", font=f_small)
     draw.text((x - 24, y_front - 70), "FRONT", fill="#374151", font=f_label)
     draw.text((x - 24, y_back - 70), "BACK", fill="#374151", font=f_label)
 
-    margin = 24  # cut line sits ~2 mm outside the card
     for y in (y_front, y_back):
         _dashed_rect(draw, x - margin, y - margin, x + NID_W + margin, y + NID_H + margin)
 
@@ -295,9 +326,31 @@ def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: st
         im = ImageOps.exif_transpose(im).convert("RGB")
         im = _apply_color_mode(im, color_mode)
         margin = 32
-        fitted = ImageOps.contain(im, (page_w - 2 * margin, page_h - 2 * margin), Image.Resampling.LANCZOS)
+        fitted = ImageOps.contain(im, (page_w - 2 * margin, page_h - 2 * margin), Image.Resampling.BILINEAR)
         page.paste(fitted, ((page_w - fitted.width) // 2, (page_h - fitted.height) // 2))
     return _to_jpeg(page)
+
+
+def save_a4_image_sheet(image_path: str, output_path: str, color_mode: str = "color", orientation: str = "portrait") -> str:
+    """Saves an uploaded image onto a 200 DPI A4 Portrait or Landscape sheet so printing/downloading respects orientation & color mode."""
+    try:
+        # 200 DPI A4: 1654 x 2339 (Portrait) or 2339 x 1654 (Landscape)
+        if orientation == "landscape":
+            page_w, page_h = 2339, 1654
+        else:
+            page_w, page_h = 1654, 2339
+        page = Image.new("RGB", (page_w, page_h), "white")
+        with Image.open(image_path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im = _apply_color_mode(im, color_mode)
+            margin = 56
+            fitted = ImageOps.contain(im, (page_w - 2 * margin, page_h - 2 * margin), Image.Resampling.LANCZOS)
+            page.paste(fitted, ((page_w - fitted.width) // 2, (page_h - fitted.height) // 2))
+        page.save(output_path, "JPEG", quality=92, dpi=(200, 200))
+        return output_path
+    except Exception as e:
+        print(f"[!] Error creating A4 sheet: {e}")
+        return image_path
 
 
 def render_pdf_page_preview(pdf_path: str, page_index: int, color_mode: str = "color", dpi: int = 100, orientation: str = "portrait") -> bytes:

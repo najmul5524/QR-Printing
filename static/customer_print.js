@@ -185,16 +185,31 @@
 
     const img = $('docInlineImg');
     const badge = $('docInlineModeBadge');
+    const sheet = $('docPaperSheet');
+    const orientNote = $('docPaperOrientNote');
     const isBw = currentMode === 'studio'
       ? ($('studioBw') && $('studioBw').value === '1')
       : ((checked('color_mode') || 'bw') === 'bw');
     const orient = checked('orientation') || 'portrait';
 
+    if (sheet) {
+      if (currentMode === 'studio') {
+        sheet.className = 'w-full max-w-[300px] bg-white rounded shadow-md border border-gray-300 p-2 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        if (orientNote) orientNote.innerText = '📸 ফটো স্টুডিওর জন্য সিলেক্ট করা ছবি';
+      } else if (orient === 'landscape') {
+        sheet.className = 'w-full max-w-[340px] aspect-[297/210] bg-white rounded shadow-md border-2 border-pink-300 p-2.5 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        if (orientNote) orientNote.innerText = '🖥️ A4 আড়াআড়ি (Landscape) পেজ লেআউট';
+      } else {
+        sheet.className = 'w-[220px] sm:w-[250px] aspect-[210/297] bg-white rounded shadow-md border-2 border-pink-300 p-2.5 flex items-center justify-center transition-all duration-300 overflow-hidden';
+        if (orientNote) orientNote.innerText = '📱 A4 লম্বালম্বি (Portrait) পেজ লেআউট';
+      }
+    }
+
     if (badge) {
       if (currentMode === 'studio') {
         badge.innerText = isBw ? 'ফটো স্টুডিও • সাদাকালো' : 'ফটো স্টুডিও • রঙিন';
       } else {
-        const orientBn = orient === 'landscape' ? 'Landscape' : 'Portrait';
+        const orientBn = orient === 'landscape' ? 'আড়াআড়ি (Landscape)' : 'লম্বালম্বি (Portrait)';
         badge.innerText = `${isBw ? 'সাদাকালো (B&W)' : 'রঙিন (Color)'} • ${orientBn}`;
       }
       badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-bold ' +
@@ -343,8 +358,10 @@
   });
 
   function nidPreviewUrl(width) {
+    const orient = checked('orientation') || 'portrait';
     return `/api/nid-preview/${uploadedFile.nid_token}?color=${checked('color_mode') || 'bw'}` +
-      `&fit=${checked('nid_fit') || 'cover'}&rf=${nidRot.front}&rb=${nidRot.back}&w=${width}&t=${Date.now()}`;
+      `&fit=${checked('nid_fit') || 'cover'}&rf=${nidRot.front}&rb=${nidRot.back}` +
+      `&orientation=${orient}&w=${width}&t=${Date.now()}`;
   }
   let nidTimer = null;
   function refreshNidInline() {

@@ -162,23 +162,23 @@ def init_db():
     conn.close()
 
 # DB Helpers
-def get_shop_by_code(shop_code: str) -> Optional[sqlite3.Row]:
+def get_shop_by_code(shop_code: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE shop_code = ? AND is_active = 1", (shop_code,))
     shop = cursor.fetchone()
     conn.close()
-    return shop
+    return dict(shop) if shop else None
 
-def get_shop_by_id(shop_id: int) -> Optional[sqlite3.Row]:
+def get_shop_by_id(shop_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE id = ?", (shop_id,))
     shop = cursor.fetchone()
     conn.close()
-    return shop
+    return dict(shop) if shop else None
 
-def get_shop_by_api_key(api_key: str) -> Optional[sqlite3.Row]:
+def get_shop_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE api_key = ? AND is_active = 1", (api_key,))
@@ -188,15 +188,15 @@ def get_shop_by_api_key(api_key: str) -> Optional[sqlite3.Row]:
         cursor.execute("SELECT * FROM shops WHERE shop_code = 'demo101' AND is_active = 1")
         shop = cursor.fetchone()
     conn.close()
-    return shop
+    return dict(shop) if shop else None
 
-def authenticate_shop(phone: str, password: str) -> Optional[sqlite3.Row]:
+def authenticate_shop(phone: str, password: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM shops WHERE phone = ? AND password = ? AND is_active = 1", (phone, password))
     shop = cursor.fetchone()
     conn.close()
-    return shop
+    return dict(shop) if shop else None
 
 def update_shop_settings(shop_id: int, data: Dict[str, Any]):
     conn = get_db()
@@ -271,13 +271,13 @@ def create_order(order_data: Dict[str, Any]) -> str:
     conn.close()
     return order_data["id"]
 
-def get_order(order_id: str) -> Optional[sqlite3.Row]:
+def get_order(order_id: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
     order = cursor.fetchone()
     conn.close()
-    return order
+    return dict(order) if order else None
 
 def update_order_details(order_id: str, updates: Dict[str, Any]):
     """Allows shop admin to edit print parameters (copies, color, paper_size, page_range, printer_target, total_price, etc.)"""
@@ -306,13 +306,13 @@ def update_order_status(order_id: str, status: str, printed_at: Optional[str] = 
     conn.commit()
     conn.close()
 
-def get_shop_orders(shop_id: int, limit: int = 50) -> List[sqlite3.Row]:
+def get_shop_orders(shop_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM orders WHERE shop_id = ? ORDER BY created_at DESC LIMIT ?", (shop_id, limit))
     orders = cursor.fetchall()
     conn.close()
-    return orders
+    return [dict(r) for r in orders]
 
 def get_shop_stats(shop_id: int) -> Dict[str, Any]:
     conn = get_db()
