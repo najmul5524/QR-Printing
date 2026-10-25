@@ -1244,7 +1244,7 @@ def preview_file(file_id: str, side: str = "front", w: int = 0, page: int = 1):
                     buf = io.BytesIO()
                     im.save(buf, "JPEG", quality=82)
                     return Response(content=buf.getvalue(), media_type="image/jpeg",
-                                    headers={"Cache-Control": "private, max-age=60"})
+                                    headers={"Cache-Control": "public, max-age=300"})
             except Exception:
                 pass
         elif ext == "pdf":
@@ -1256,7 +1256,7 @@ def preview_file(file_id: str, side: str = "front", w: int = 0, page: int = 1):
                 buf = io.BytesIO()
                 im.save(buf, "JPEG", quality=84)
                 return Response(content=buf.getvalue(), media_type="image/jpeg",
-                                headers={"Cache-Control": "private, max-age=30"})
+                                headers={"Cache-Control": "public, max-age=300"})
             except Exception:
                 pass
     media_type = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -1478,7 +1478,7 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: 
             canvas.paste(im_b, ((cw - im_b.width) // 2, im_f.height + pad * 2))
             buf = io.BytesIO()
             canvas.save(buf, "JPEG", quality=86)
-            return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
+            return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=300"})
 
     src = resolve_upload(file_id)
     ext = utils.get_ext(src)
@@ -1492,7 +1492,7 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: 
             im = image_fx.camscanner_process(im, mode=mode, strength=strength)
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=84)
-        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=300"})
 
     with Image.open(orig) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
@@ -1501,7 +1501,7 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: 
             im = image_fx.camscanner_process(im, mode=mode, strength=strength)
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=84)
-        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.post("/api/image/camscan")
@@ -2467,6 +2467,7 @@ async def ping():
 
 
 @app.get("/api/storage-status")
+@app.get("/api/r2/health")
 def storage_status():
     """Diagnostic endpoint to verify whether Cloudflare R2 is configured and reachable."""
     import storage
