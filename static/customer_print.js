@@ -80,6 +80,16 @@
   let instantLocalUrl = null;
   let docInlinePage = 1;
 
+  function syncActiveStudioPhotoUrl() {
+    if (uploadedFile && uploadedFile.file_id && Array.isArray(studioPhotos)) {
+      const match = studioPhotos.find(p => p.file_id === uploadedFile.file_id);
+      if (match) {
+        match.url = instantLocalUrl || `/api/preview/${encodeURIComponent(match.file_id)}?w=300&v=${fileRev}`;
+        renderStudioPhotoPool();
+      }
+    }
+  }
+
   function bumpFileRev() {
     fileRev++;
     docInlinePage = 1;
@@ -87,6 +97,7 @@
       URL.revokeObjectURL(instantLocalUrl);
       instantLocalUrl = null;
     }
+    syncActiveStudioPhotoUrl();
   }
 
   // Fast client-side image compression before upload (shrinks 5-12MB camera photos to ~300KB in <60ms)
@@ -692,21 +703,109 @@
     renderStudioPhotoPool();
   }
 
+  let activeStudioPhotoIndex = 0;
+
+  window.selectStudioPhoto = function(idx) {
+    if (!studioPhotos || idx < 0 || idx >= studioPhotos.length) return;
+    activeStudioPhotoIndex = idx;
+    const p = studioPhotos[idx];
+    if (!p) return;
+
+    // Set uploadedFile to this specific photo so rotate, crop, camscan, removeBg operate on it
+    uploadedFile = {
+      file_id: p.file_id,
+      original_filename: p.name,
+      file_type: 'image',
+      page_count: 1,
+      file_size: p.file_size || 0,
+      is_office: false,
+      doc_kind: null,
+      office_orientation: 'portrait',
+      preview_url: `/api/preview/${encodeURIComponent(p.file_id)}`
+    };
+    instantLocalUrl = p.url;
+
+    // Sync activeStudioRowIndex if appropriate
+    if (studioItems[activeStudioRowIndex]) {
+      studioItems[activeStudioRowIndex].photo_idx = idx;
+      studioItems[activeStudioRowIndex].file_id = p.file_id;
+    }
+
+    // Update fileNameText and badges at top
+    const nameEl = $('fileNameText');
+    if (nameEl) nameEl.innerText = p.name;
+    const metaEl = $('fileMetaText');
+    if (metaEl) metaEl.innerText = `📸 ছবি ${bn(idx + 1)} • ফটো পুল`;
+    const iconEl = $('fileIcon');
+    if (iconEl) iconEl.innerText = '🖼️';
+
+    // Show fileInfoBadge and ensure toolbar buttons are visible for editing
+    if (fileInfoBadge) fileInfoBadge.classList.remove('hidden');
+    const btnCrop = $('btnOpenCrop');
+    const btnCam = $('btnOpenCamScan');
+    const btnRbg = $('btnOpenRemoveBg');
+    const btnRot = $('btnRotateFile');
+    const btnPrev = $('btnOpenPreview');
+
+    if (btnCrop) btnCrop.classList.remove('hidden');
+    if (btnCam) btnCam.classList.remove('hidden');
+    if (btnRbg) btnRbg.classList.remove('hidden');
+    if (btnRot) btnRot.classList.remove('hidden');
+    if (btnPrev) btnPrev.classList.remove('hidden');
+
+    // Force top live preview to reload this photo
+    const img = $('docInlineImg');
+    if (img) img.dataset.revKey = '';
+    refreshTopLivePreview(true);
+
+    // Re-render UI
+    renderStudioPhotoPool();
+    renderStudioItems();
+    scheduleStudio();
+
+    // Scroll top live preview container smoothly into view
+    const topBadge = $('fileInfoBadge');
+    if (topBadge) {
+      topBadge.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
   function renderStudioPhotoPool() {
     const box = $('studioPhotoPool');
     if (!box) return;
     box.innerHTML = '';
     studioPhotos.forEach((p, idx) => {
+      const isSelected = (uploadedFile && uploadedFile.file_id === p.file_id) || (idx === activeStudioPhotoIndex);
       const item = document.createElement('div');
-      item.className = 'relative flex items-center gap-1.5 p-1 bg-white border border-pink-200 rounded-lg shadow-xs';
+      item.className = `relative flex items-center gap-2 p-1.5 rounded-xl cursor-pointer transition select-none ${
+        isSelected
+          ? 'bg-pink-100/90 border-2 border-pink-600 shadow-md ring-2 ring-pink-400/50 scale-[1.02]'
+          : 'bg-white border border-pink-200 hover:border-pink-400 hover:bg-pink-50/60 shadow-xs'
+      }`;
+      item.title = 'ক্লিক করে এই ছবিটি প্রিভিউ ও এডিট করুন';
+      item.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        selectStudioPhoto(idx);
+      };
       item.innerHTML = `
-        <img src="${p.url}" alt="${p.name}" class="w-8 h-10 object-cover rounded border border-gray-200">
-        <div class="text-[10px] leading-tight pr-1">
-          <p class="font-bold text-gray-800">ছবি ${bn(idx + 1)}</p>
-          <p class="text-gray-500 truncate max-w-[85px]">${p.name}</p>
+        <div class="relative shrink-0">
+          <img src="${p.url}" alt="${p.name}" class="w-10 h-12 object-cover rounded-lg border ${isSelected ? 'border-pink-500 ring-1 ring-pink-400' : 'border-gray-200'}">
+          <span class="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full ${isSelected ? 'bg-pink-600 text-white' : 'bg-gray-700 text-white'} text-[9px] font-bold flex items-center justify-center shadow">
+            ${bn(idx + 1)}
+          </span>
+        </div>
+        <div class="text-[10px] leading-tight pr-1 min-w-[70px]">
+          <p class="font-bold flex items-center gap-1 ${isSelected ? 'text-pink-900' : 'text-gray-800'}">
+            <span>ছবি ${bn(idx + 1)}</span>
+            ${isSelected ? '<span class="text-[9px] bg-pink-600 text-white px-1.5 py-0.5 rounded-full font-bold shadow-xs">সিলেক্টেড</span>' : ''}
+          </p>
+          <p class="text-gray-500 truncate max-w-[90px] mt-0.5">${p.name}</p>
+          <p class="text-[9px] ${isSelected ? 'text-pink-700 font-semibold' : 'text-gray-400'} mt-0.5">
+            ${isSelected ? '👆 লাইভ প্রিভিউতে সক্রিয়' : 'ক্লিক করুন'}
+          </p>
         </div>
         ${studioPhotos.length > 1 ? `
-          <button type="button" onclick="removeStudioPhoto(${idx})" class="text-gray-400 hover:text-red-600 text-xs font-bold px-1" title="ছবি মুছুন">&times;</button>
+          <button type="button" onclick="event.stopPropagation(); removeStudioPhoto(${idx})" class="text-gray-400 hover:text-red-600 text-sm font-bold px-1.5 py-0.5 rounded-lg hover:bg-red-50 self-start ml-auto" title="ছবি মুছুন">&times;</button>
         ` : ''}
       `;
       box.appendChild(item);
@@ -738,17 +837,13 @@
       if (res.ok && (data.file_id || data.success)) {
         let localUrl = '';
         try { localUrl = URL.createObjectURL(file); } catch (e) {}
-        studioPhotos.push({
+        const newPhoto = {
           file_id: data.file_id,
           name: data.original_filename || file.name,
           url: localUrl || `/api/preview/${encodeURIComponent(data.file_id)}?w=300`
-        });
-        if (!uploadedFile) {
-          uploadedFile = { ...data };
-        }
-        renderStudioPhotoPool();
-        renderStudioItems();
-        scheduleStudio();
+        };
+        studioPhotos.push(newPhoto);
+        selectStudioPhoto(studioPhotos.length - 1);
       } else {
         alert(data.detail || 'ছবি আপলোড ব্যর্থ হয়েছে');
       }
@@ -773,9 +868,10 @@
       if (it.photo_idx === idx) it.photo_idx = 0;
       else if (it.photo_idx > idx) it.photo_idx--;
     });
-    renderStudioPhotoPool();
-    renderStudioItems();
-    scheduleStudio();
+    if (activeStudioPhotoIndex >= studioPhotos.length) {
+      activeStudioPhotoIndex = studioPhotos.length - 1;
+    }
+    selectStudioPhoto(activeStudioPhotoIndex);
   };
 
   function updateActiveRowUI() {
@@ -2571,6 +2667,7 @@
       bumpFileRev();
       if (uploadedFile.file_type === 'image' && !uploadedFile.is_nid && pendingCropBlob) {
         instantLocalUrl = URL.createObjectURL(pendingCropBlob);
+        syncActiveStudioPhotoUrl();
       } else if (uploadedFile.file_type === 'pdf') {
         docInlinePage = modalPdfPage;
       }
@@ -2741,6 +2838,7 @@
           docInlinePage = modalPdfPage;
         }
         bumpFileRev();
+        syncActiveStudioPhotoUrl();
         closeCamscanModal();
         refreshTopLivePreview(true);
         if (currentMode === 'studio') scheduleStudio();
@@ -3415,6 +3513,7 @@
         const data = await res.json();
         if (data.success) {
           bumpFileRev();
+          syncActiveStudioPhotoUrl();
           closeRemoveBgModal();
           refreshTopLivePreview(true);
           if (currentMode === 'studio') scheduleStudio();
