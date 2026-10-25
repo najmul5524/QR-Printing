@@ -1080,6 +1080,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     pages = utils.get_file_page_count(save_path, file_type)
     return {
+        "success": True,
         "file_id": file_id,
         "original_filename": orig_safe_name,
         "file_type": file_type,

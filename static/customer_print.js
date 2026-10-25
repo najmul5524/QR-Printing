@@ -722,17 +722,30 @@
       btn.disabled = true;
       btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> <span>আপলোড হচ্ছে...</span>';
     }
-    const form = new FormData();
-    form.append('file', file);
     try {
+      let uploadTarget = file;
+      if (typeof compressImageBeforeUpload === 'function') {
+        try {
+          uploadTarget = await compressImageBeforeUpload(file, 2000, 0.88);
+        } catch (err) {
+          console.warn('Image compression skipped:', err);
+        }
+      }
+      const form = new FormData();
+      form.append('file', uploadTarget, file.name);
       const res = await fetch('/api/upload', { method: 'POST', body: form });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && (data.file_id || data.success)) {
+        let localUrl = '';
+        try { localUrl = URL.createObjectURL(file); } catch (e) {}
         studioPhotos.push({
           file_id: data.file_id,
           name: data.original_filename || file.name,
-          url: `/api/preview/${encodeURIComponent(data.file_id)}?w=300`
+          url: localUrl || `/api/preview/${encodeURIComponent(data.file_id)}?w=300`
         });
+        if (!uploadedFile) {
+          uploadedFile = { ...data };
+        }
         renderStudioPhotoPool();
         renderStudioItems();
         scheduleStudio();
@@ -740,7 +753,7 @@
         alert(data.detail || 'ছবি আপলোড ব্যর্থ হয়েছে');
       }
     } catch (e) {
-      alert('ছবি আপলোড ব্যর্থ হয়েছে: ' + e);
+      alert('ছবি আপলোড ব্যর্থ হয়েছে: ' + (e.message || e));
     } finally {
       if (btn) {
         btn.disabled = false;
