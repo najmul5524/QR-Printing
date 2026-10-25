@@ -421,9 +421,24 @@
         <img id="studioPreviewImg" src="" alt="preview" class="w-full max-h-[460px] object-contain rounded-lg bg-white shadow border">
       </div>
 
+      <!-- Multi-photo Pool / Gallery for Photo Studio -->
+      <div class="space-y-2 bg-pink-50/50 p-2.5 rounded-xl border border-pink-200">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-bold text-gray-800 flex items-center gap-1.5">
+            <span>📸</span> <span>যুক্ত করা ছবিসমূহ (ফটো পুল):</span>
+          </span>
+          <button type="button" onclick="$('inputAddStudioPhoto').click()" class="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm transition">
+            <span>➕</span> <span>নতুন ছবি যোগ করুন</span>
+          </button>
+          <input type="file" id="inputAddStudioPhoto" accept="image/*" class="hidden" onchange="handleAddStudioPhoto(this)">
+        </div>
+        <div id="studioPhotoPool" class="flex flex-wrap items-center gap-2 pt-1"></div>
+        <p class="text-[10px] text-gray-500">💡 একাধিক ব্যক্তির ছবি বা একই ছবির ভিন্ন ফ্রেম এখানে যোগ করে নিচের প্রতিটি সারিতে আলাদাভাবে বসাতে পারবেন।</p>
+      </div>
+
       <!-- sizes -->
       <div class="space-y-2">
-        <label class="block text-xs font-semibold text-gray-600">ছবির সাইজ ও সংখ্যা (সর্বোচ্চ ৩ ধরনের ছবি একসাথে)</label>
+        <label class="block text-xs font-semibold text-gray-600">ছবির সাইজ ও সংখ্যা (সর্বোচ্চ ১২ ধরনের ছবি একসাথে)</label>
         <div id="studioItems" class="space-y-2"></div>
         <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
           <input type="checkbox" id="studioFill" class="w-4 h-4"> পেজ পুরো ভরে ফেলুন (প্রথম সাইজের ছবি যত ধরে)
@@ -471,11 +486,15 @@
       </div>
 
       <!-- zoom / position -->
-      <div class="space-y-2">
-        <div>
-          <div class="flex justify-between text-xs"><span class="font-semibold text-gray-600">🔍 জুম</span><span id="valZoom" class="font-mono text-gray-500">1.0×</span></div>
-          <input type="range" id="studioZoom" min="100" max="300" value="100" class="w-full accent-pink-600">
+      <div class="space-y-2 p-3 bg-pink-50/40 rounded-xl border border-pink-200">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-bold text-gray-700 flex items-center gap-1">
+            <span>🔍</span> <span>ক্রপ ও জুম সাজান:</span>
+            <span id="studioActiveRowLabel" class="text-pink-700 font-bold bg-white px-2 py-0.5 rounded border border-pink-300 shadow-xs">সারি ১</span>
+          </span>
+          <span id="valZoom" class="font-mono text-pink-700 font-bold">1.0×</span>
         </div>
+        <input type="range" id="studioZoom" min="100" max="300" value="100" class="w-full accent-pink-600">
         <div class="grid grid-cols-2 gap-2">
           <div>
             <div class="text-xs font-semibold text-gray-600">↔ বামে/ডানে</div>
@@ -486,6 +505,7 @@
             <input type="range" id="studioOy" min="-100" max="100" value="0" class="w-full accent-pink-600">
           </div>
         </div>
+        <p class="text-[10px] text-gray-500">💡 যেকোনো সারির জুম/পজিশন পরিবর্তন করলে তা শুধু সেই সারিতেই প্রযোজ্য হবে, অন্য সাইজে পরিবর্তন হবে না।</p>
       </div>
 
       <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
@@ -1267,6 +1287,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102515"></script>
+  <script src="/static/customer_print.js?v=2026102516"></script>
 </body>
 </html>

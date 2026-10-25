@@ -668,40 +668,180 @@
     { id: 'stamp', name: 'স্ট্যাম্প সাইজ ২০×২৫ মিমি', w: 20, h: 25 },
     { id: 'custom', name: 'নিজের সাইজ (মিমি)', w: 40, h: 50 }
   ];
-  let studioItems = [{ preset: 'p4555', w: 45, h: 55, count: 6 }];
+  let studioItems = [{ preset: 'p4555', w: 45, h: 55, count: 6, photo_idx: 0, zoom: 1.0, ox: 0.0, oy: 0.0 }];
+  let studioPhotos = []; // [{ file_id, name, url }]
+  let activeStudioRowIndex = 0;
   let studioBg = 'none';
   let studioSuit = 'none';
   let studioBlobUrl = null;
   let studioTimer = null;
   let studioInited = false;
 
+  function syncStudioPhotosFromUploaded() {
+    if (uploadedFile && uploadedFile.file_type === 'image') {
+      const exists = studioPhotos.some(p => p.file_id === uploadedFile.file_id);
+      if (!exists) {
+        studioPhotos.unshift({
+          file_id: uploadedFile.file_id,
+          name: uploadedFile.original_filename || 'ছবি ১',
+          url: instantLocalUrl || `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=300`
+        });
+      }
+    }
+    renderStudioPhotoPool();
+  }
+
+  function renderStudioPhotoPool() {
+    const box = $('studioPhotoPool');
+    if (!box) return;
+    box.innerHTML = '';
+    studioPhotos.forEach((p, idx) => {
+      const item = document.createElement('div');
+      item.className = 'relative flex items-center gap-1.5 p-1 bg-white border border-pink-200 rounded-lg shadow-xs';
+      item.innerHTML = `
+        <img src="${p.url}" alt="${p.name}" class="w-8 h-10 object-cover rounded border border-gray-200">
+        <div class="text-[10px] leading-tight pr-1">
+          <p class="font-bold text-gray-800">ছবি ${bn(idx + 1)}</p>
+          <p class="text-gray-500 truncate max-w-[85px]">${p.name}</p>
+        </div>
+        ${studioPhotos.length > 1 ? `
+          <button type="button" onclick="removeStudioPhoto(${idx})" class="text-gray-400 hover:text-red-600 text-xs font-bold px-1" title="ছবি মুছুন">&times;</button>
+        ` : ''}
+      `;
+      box.appendChild(item);
+    });
+  }
+
+  window.handleAddStudioPhoto = async function(input) {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if (data.success) {
+        studioPhotos.push({
+          file_id: data.file_id,
+          name: data.original_filename || file.name,
+          url: `/api/preview/${encodeURIComponent(data.file_id)}?w=300`
+        });
+        renderStudioPhotoPool();
+        renderStudioItems();
+        scheduleStudio();
+      } else {
+        alert(data.detail || 'ছবি আপলোড ব্যর্থ হয়েছে');
+      }
+    } catch (e) {
+      alert('ছবি আপলোড ব্যর্থ হয়েছে: ' + e);
+    } finally {
+      input.value = '';
+    }
+  };
+
+  window.removeStudioPhoto = function(idx) {
+    if (studioPhotos.length <= 1) {
+      alert('কমপক্ষে একটি ছবি থাকতে হবে।');
+      return;
+    }
+    studioPhotos.splice(idx, 1);
+    studioItems.forEach(it => {
+      if (it.photo_idx === idx) it.photo_idx = 0;
+      else if (it.photo_idx > idx) it.photo_idx--;
+    });
+    renderStudioPhotoPool();
+    renderStudioItems();
+    scheduleStudio();
+  };
+
+  function updateActiveRowUI() {
+    if (activeStudioRowIndex >= studioItems.length) {
+      activeStudioRowIndex = Math.max(0, studioItems.length - 1);
+    }
+    const it = studioItems[activeStudioRowIndex];
+    if (!it) return;
+
+    const label = $('studioActiveRowLabel');
+    if (label) {
+      const pName = (PRESETS.find(x => x.id === it.preset) || {}).name || `${it.w}×${it.h} মিমি`;
+      label.innerText = `সারি ${bn(activeStudioRowIndex + 1)} (${pName})`;
+    }
+
+    const z = $('studioZoom');
+    const ox = $('studioOx');
+    const oy = $('studioOy');
+    const valZ = $('valZoom');
+
+    if (z) z.value = Math.round((it.zoom !== undefined ? it.zoom : 1.0) * 100);
+    if (ox) ox.value = Math.round((it.ox !== undefined ? it.ox : 0.0) * 100);
+    if (oy) oy.value = Math.round((it.oy !== undefined ? it.oy : 0.0) * 100);
+    if (valZ) valZ.innerText = (it.zoom !== undefined ? it.zoom : 1.0).toFixed(1) + '×';
+  }
+
   function renderStudioItems() {
     const box = $('studioItems');
+    if (!box) return;
     box.innerHTML = '';
     studioItems.forEach((it, i) => {
+      if (it.photo_idx === undefined) it.photo_idx = 0;
+      if (it.zoom === undefined) it.zoom = 1.0;
+      if (it.ox === undefined) it.ox = 0.0;
+      if (it.oy === undefined) it.oy = 0.0;
+
+      const isActive = activeStudioRowIndex === i;
       const row = document.createElement('div');
-      row.className = 'border rounded-xl p-2 space-y-1.5 bg-gray-50';
+      row.className = `border-2 rounded-xl p-2.5 space-y-2 transition ${isActive ? 'border-pink-500 bg-pink-50/30 shadow-xs ring-1 ring-pink-400' : 'border-gray-200 bg-gray-50'}`;
+
+      const photoOptions = studioPhotos.length > 1
+        ? `<div class="flex items-center gap-1.5 text-xs bg-white p-1.5 rounded-lg border">
+             <span class="text-gray-600 font-bold shrink-0">ছবি নির্বাচন:</span>
+             <select data-i="${i}" data-k="photo_idx" class="flex-1 px-2 py-0.5 border border-pink-300 rounded text-xs bg-pink-50/50 font-bold text-gray-800">
+               ${studioPhotos.map((p, pIdx) => `<option value="${pIdx}" ${pIdx === it.photo_idx ? 'selected' : ''}>📸 ছবি ${bn(pIdx + 1)} (${p.name.slice(0, 16)})</option>`).join('')}
+             </select>
+           </div>`
+        : '';
+
       row.innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+            <span class="w-5 h-5 rounded-full ${isActive ? 'bg-pink-600 text-white' : 'bg-gray-200 text-gray-700'} flex items-center justify-center text-[11px] font-bold">${bn(i + 1)}</span>
+            <span>সারি ${bn(i + 1)}</span>
+          </span>
+          <button type="button" data-edit-row="${i}" class="px-2.5 py-0.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${isActive ? 'bg-pink-600 text-white shadow-xs' : 'bg-white border border-gray-300 hover:bg-pink-50 text-gray-700'}">
+            <span>${isActive ? '✏️ এডিটিং সক্রিয়' : '🔍 জুম ও ক্রপ'}</span>
+          </button>
+          ${i > 0 ? `<button type="button" data-rm="${i}" class="text-gray-400 hover:text-red-600 font-bold px-1 text-sm" title="এই সারি মুছুন">&times;</button>` : ''}
+        </div>
+
         <div class="flex gap-2">
-          <select data-i="${i}" data-k="preset" class="flex-1 min-w-0 px-2 py-1.5 border rounded-lg text-xs bg-white">
+          <select data-i="${i}" data-k="preset" class="flex-1 min-w-0 px-2 py-1.5 border rounded-lg text-xs bg-white font-medium">
             ${PRESETS.map((p) => `<option value="${p.id}" ${p.id === it.preset ? 'selected' : ''}>${p.name}</option>`).join('')}
           </select>
-          <input type="number" data-i="${i}" data-k="count" min="1" max="60" value="${it.count}" title="কয়টি" class="w-16 px-2 py-1.5 border rounded-lg text-xs text-center">
-          ${i > 0 ? `<button type="button" data-rm="${i}" class="px-2 text-red-600 font-bold">✕</button>` : ''}
+          <div class="flex items-center gap-1 bg-white border rounded-lg px-2 py-1">
+            <span class="text-[11px] text-gray-500">কপি:</span>
+            <input type="number" data-i="${i}" data-k="count" min="1" max="60" value="${it.count}" title="কয়টি" class="w-12 text-xs font-bold text-center focus:outline-none">
+          </div>
         </div>
+
+        ${photoOptions}
+
         ${it.preset === 'custom' ? `<div class="flex items-center gap-2 text-xs">
-          চওড়া <input type="number" data-i="${i}" data-k="w" min="10" max="190" value="${it.w}" class="w-16 px-2 py-1 border rounded text-center"> মিমি ×
-          উচ্চতা <input type="number" data-i="${i}" data-k="h" min="10" max="280" value="${it.h}" class="w-16 px-2 py-1 border rounded text-center"> মিমি</div>` : ''}`;
+          চওড়া <input type="number" data-i="${i}" data-k="w" min="10" max="190" value="${it.w}" class="w-16 px-2 py-1 border rounded text-center font-bold"> মিমি ×
+          উচ্চতা <input type="number" data-i="${i}" data-k="h" min="10" max="280" value="${it.h}" class="w-16 px-2 py-1 border rounded text-center font-bold"> মিমি</div>` : ''}
+      `;
       box.appendChild(row);
     });
+
     if (studioItems.length < 12) {
       const add = document.createElement('button');
       add.type = 'button';
       add.dataset.add = '1';
-      add.className = 'w-full py-1.5 border-2 border-dashed rounded-lg text-xs font-bold text-gray-500 hover:border-pink-500 hover:text-pink-600';
+      add.className = 'w-full py-2 border-2 border-dashed border-gray-300 rounded-xl text-xs font-bold text-gray-600 hover:border-pink-500 hover:text-pink-600 transition flex items-center justify-center gap-1.5 bg-white';
       add.innerText = '➕ আরো ছবির সাইজ ও সংখ্যা যোগ করুন (পাসপোর্ট / স্ট্যাম্প / কাস্টম)';
       box.appendChild(add);
     }
+
+    updateActiveRowUI();
   }
 
   $('studioItems').addEventListener('input', (e) => {
@@ -712,6 +852,7 @@
     else if (k === 'w' || k === 'h') it[k] = Math.max(10, parseFloat(e.target.value) || 10);
     scheduleStudio();
   });
+
   $('studioItems').addEventListener('change', (e) => {
     if (e.target.dataset.k === 'preset') {
       const it = studioItems[+e.target.dataset.i];
@@ -719,17 +860,56 @@
       it.preset = p.id; it.w = p.w; it.h = p.h;
       renderStudioItems();
       scheduleStudio();
+    } else if (e.target.dataset.k === 'photo_idx') {
+      const it = studioItems[+e.target.dataset.i];
+      it.photo_idx = parseInt(e.target.value, 10) || 0;
+      scheduleStudio();
     }
   });
+
   $('studioItems').addEventListener('click', (e) => {
-    if (e.target.dataset.rm) { studioItems.splice(+e.target.dataset.rm, 1); renderStudioItems(); scheduleStudio(); }
-    else if (e.target.dataset.add) { studioItems.push({ preset: 'stamp', w: 20, h: 25, count: 8 }); renderStudioItems(); scheduleStudio(); }
+    const editBtn = e.target.closest('[data-edit-row]');
+    if (editBtn) {
+      activeStudioRowIndex = +editBtn.dataset.editRow;
+      renderStudioItems();
+      return;
+    }
+    if (e.target.dataset.rm) {
+      studioItems.splice(+e.target.dataset.rm, 1);
+      if (activeStudioRowIndex >= studioItems.length) activeStudioRowIndex = Math.max(0, studioItems.length - 1);
+      renderStudioItems();
+      scheduleStudio();
+    } else if (e.target.dataset.add) {
+      studioItems.push({
+        preset: 'stamp',
+        w: 20,
+        h: 25,
+        count: 8,
+        photo_idx: studioPhotos.length > 1 ? 1 : 0,
+        zoom: 1.0,
+        ox: 0.0,
+        oy: 0.0
+      });
+      activeStudioRowIndex = studioItems.length - 1;
+      renderStudioItems();
+      scheduleStudio();
+    }
   });
 
   function studioParams() {
     return {
       paper: $('studioPaper').value,
-      items: studioItems.map((it) => ({ w: it.w, h: it.h, count: it.count })),
+      photos: studioPhotos.map(p => p.file_id),
+      items: studioItems.map((it) => ({
+        w: it.w,
+        h: it.h,
+        count: it.count,
+        file_id: (studioPhotos[it.photo_idx] || studioPhotos[0] || {}).file_id || (uploadedFile ? uploadedFile.file_id : ''),
+        photo_idx: it.photo_idx || 0,
+        zoom: it.zoom !== undefined ? it.zoom : 1.0,
+        ox: it.ox !== undefined ? it.ox : 0.0,
+        oy: it.oy !== undefined ? it.oy : 0.0
+      })),
       fill: $('studioFill').checked,
       brightness: +$('studioBrightness').value,
       contrast: +$('studioContrast').value,
@@ -737,9 +917,9 @@
       border: $('studioBorder').checked,
       bg: 'none',
       tol: 45,
-      zoom: +$('studioZoom').value / 100,
-      ox: +$('studioOx').value / 100,
-      oy: +$('studioOy').value / 100,
+      zoom: 1.0,
+      ox: 0.0,
+      oy: 0.0,
       suit: 'none',
       suit_zoom: 1,
       suit_ox: 0,
@@ -750,7 +930,10 @@
   function scheduleStudio() {
     $('valBrightness').innerText = $('studioBrightness').value;
     $('valContrast').innerText = $('studioContrast').value;
-    $('valZoom').innerText = (+$('studioZoom').value / 100).toFixed(1) + '×';
+    const activeIt = studioItems[activeStudioRowIndex];
+    if (activeIt) {
+      $('valZoom').innerText = (activeIt.zoom !== undefined ? activeIt.zoom : 1.0).toFixed(1) + '×';
+    }
     calculateBill();
     refreshTopLivePreview();
     clearTimeout(studioTimer);
@@ -765,7 +948,11 @@
       const res = await fetch('/api/studio-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: uploadedFile.file_id, params: studioParams() })
+        body: JSON.stringify({
+          file_id: (studioPhotos[0] || {}).file_id || uploadedFile.file_id,
+          photos: studioPhotos.map(p => p.file_id),
+          params: studioParams()
+        })
       });
       if (!res.ok) throw new Error('preview failed');
       const info = JSON.parse(res.headers.get('X-Studio-Info') || '{}');
@@ -786,10 +973,25 @@
   function initStudio() {
     if (!studioInited) {
       studioInited = true;
+      syncStudioPhotosFromUploaded();
       renderStudioItems();
-      ['studioBrightness', 'studioContrast', 'studioZoom', 'studioOx', 'studioOy'].forEach((id) => {
+      ['studioBrightness', 'studioContrast'].forEach((id) => {
         const el = $(id);
         if (el) el.addEventListener('input', scheduleStudio);
+      });
+      ['studioZoom', 'studioOx', 'studioOy'].forEach((id) => {
+        const el = $(id);
+        if (el) {
+          el.addEventListener('input', () => {
+            const it = studioItems[activeStudioRowIndex];
+            if (it) {
+              if (id === 'studioZoom') it.zoom = +el.value / 100;
+              else if (id === 'studioOx') it.ox = +el.value / 100;
+              else if (id === 'studioOy') it.oy = +el.value / 100;
+            }
+            scheduleStudio();
+          });
+        }
       });
       ['studioPaper', 'studioBw', 'studioFill', 'studioBorder'].forEach((id) => {
         const el = $(id);
@@ -797,6 +999,8 @@
       });
       $('btnStudioMinus').addEventListener('click', () => { const v = +$('studioCopies').value; if (v > 1) { $('studioCopies').value = v - 1; scheduleStudio(); } });
       $('btnStudioPlus').addEventListener('click', () => { const v = +$('studioCopies').value; if (v < 100) { $('studioCopies').value = v + 1; scheduleStudio(); } });
+    } else {
+      syncStudioPhotosFromUploaded();
     }
     scheduleStudio();
   }

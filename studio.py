@@ -1,3 +1,4 @@
+import os
 """
 Photo Studio engine: passport / stamp / visa / custom-size photos laid out in neat rows on
 A4 (or 4x6 inch) paper, with brightness, contrast, black&white, zoom/position and
@@ -34,15 +35,41 @@ def sanitize_params(raw: Dict) -> Dict:
     raw = raw or {}
     paper = raw.get("paper") if raw.get("paper") in PAPERS else "A4"
 
+    global_zoom = _num(raw.get("zoom"), 1.0, 3.0, 1.0)
+    global_ox = _num(raw.get("ox"), -1.0, 1.0, 0.0)
+    global_oy = _num(raw.get("oy"), -1.0, 1.0, 0.0)
+
     items = []
     for it in (raw.get("items") or [])[:MAX_ITEMS]:
         w = _num(it.get("w"), 10, 190, 0)
         h = _num(it.get("h"), 10, 280, 0)
         count = int(_num(it.get("count"), 0, 60, 0))
         if w and h and count > 0:
-            items.append({"w": w, "h": h, "count": count})
+            item_entry = {
+                "w": w,
+                "h": h,
+                "count": count,
+                "file_id": str(it.get("file_id") or "").strip() or None,
+                "photo_idx": int(_num(it.get("photo_idx"), 0, 20, 0)),
+                "zoom": _num(it.get("zoom"), 1.0, 3.0, global_zoom),
+                "ox": _num(it.get("ox"), -1.0, 1.0, global_ox),
+                "oy": _num(it.get("oy"), -1.0, 1.0, global_oy),
+                "bw": bool(it.get("bw")) if "bw" in it else None,
+            }
+            items.append(item_entry)
     if not items:
-        items = [{"w": 45.0, "h": 55.0, "count": 6}]
+        items = [{
+            "w": 45.0,
+            "h": 55.0,
+            "count": 6,
+            "file_id": None,
+            "photo_idx": 0,
+            "zoom": global_zoom,
+            "ox": global_ox,
+            "oy": global_oy,
+            "bw": None,
+        }]
+    photos = [str(x).strip() for x in (raw.get("photos") or []) if str(x).strip()]
 
     bg = raw.get("bg") or "none"
     if bg != "none" and not HEX_RE.match(str(bg)):
@@ -58,6 +85,7 @@ def sanitize_params(raw: Dict) -> Dict:
 
     return {
         "paper": paper,
+        "photos": photos,
         "items": items,
         "fill": bool(raw.get("fill")),
         "brightness": _num(raw.get("brightness"), -60, 60, 0),
@@ -190,8 +218,17 @@ def pack(items: List[Tuple[int, float, float]], page_w: float, page_h: float, ma
     return placements, unplaced
 
 
-def render_sheet(src_path: str, params: Dict, dpi: int = 300) -> Tuple[Image.Image, Dict]:
-    """Returns (sheet image, info) where info tells how many photos of each size fit."""
+def render_sheet(
+    src_path: str,
+    params: Dict,
+    dpi: int = 300,
+    photos_map: Dict[str, str] = None,
+    photos_list: List[str] = None
+) -> Tuple[Image.Image, Dict]:
+    """
+    Returns (sheet image, info) where info tells how many photos of each size fit.
+    Supports multi-photo layouts and independent per-row zoom & crop.
+    """
     p = sanitize_params(params) if "paper" not in params or "fill" not in params else params
     page_w, page_h, margin, gap = PAPERS[p["paper"]]
     mm = lambda v: int(round(v / 25.4 * dpi))
@@ -210,45 +247,79 @@ def render_sheet(src_path: str, params: Dict, dpi: int = 300) -> Tuple[Image.Ima
             placements, page_w, page_h = alt, page_h, page_w
 
     import image_fx
-    # working photo: big enough for the largest frame at this DPI (even when zoomed)
     max_side = max(700, int(dpi * 8))
-    photo = load_working(src_path, max_side)
 
-    # 1. CamScanner Document/Photo Enhancement if selected
-    if p.get("camscan") and p["camscan"] != "none":
-        photo = image_fx.camscanner_process(photo, mode=p["camscan"])
+    # Pre-process base photos for items
+    processed_photos: Dict[str, Image.Image] = {}
 
-    # 2. Advanced Remove.bg style Background Replacement
-    if p["bg"] != "none":
-        rgba, mask = image_fx.advanced_remove_background(photo, p["tol"])
-        solid = Image.new("RGB", photo.size, p["bg"])
-        photo = Image.composite(photo, solid, mask)
+    def get_base_photo_for_item(it_cfg: Dict) -> Image.Image:
+        target_path = src_path
+        fid = it_cfg.get("file_id")
+        pidx = it_cfg.get("photo_idx", 0)
 
-    # 3. Formal Suit / Dress Overlay
-    if p.get("suit") and p["suit"] != "none":
-        photo = image_fx.apply_dress_overlay(
-            photo, p["suit"],
-            suit_zoom=p.get("suit_zoom", 1.0),
-            suit_ox=p.get("suit_ox", 0.0),
-            suit_oy=p.get("suit_oy", 0.0)
-        )
+        if photos_map and fid and fid in photos_map and os.path.isfile(photos_map[fid]):
+            target_path = photos_map[fid]
+        elif photos_list and 0 <= pidx < len(photos_list) and os.path.isfile(photos_list[pidx]):
+            target_path = photos_list[pidx]
 
-    # 4. Color, Brightness & Contrast adjustment
-    photo = adjust(photo, p["brightness"], p["contrast"], p["bw"])
+        if target_path in processed_photos:
+            return processed_photos[target_path]
+
+        im = load_working(target_path, max_side)
+
+        # 1. CamScanner
+        if p.get("camscan") and p["camscan"] != "none":
+            im = image_fx.camscanner_process(im, mode=p["camscan"])
+
+        # 2. Advanced Remove.bg style Background Replacement
+        if p["bg"] != "none":
+            rgba, mask = image_fx.advanced_remove_background(im, p["tol"])
+            solid = Image.new("RGB", im.size, p["bg"])
+            im = Image.composite(im, solid, mask)
+
+        # 3. Formal Suit / Dress Overlay
+        if p.get("suit") and p["suit"] != "none":
+            im = image_fx.apply_dress_overlay(
+                im, p["suit"],
+                suit_zoom=p.get("suit_zoom", 1.0),
+                suit_ox=p.get("suit_ox", 0.0),
+                suit_oy=p.get("suit_oy", 0.0)
+            )
+
+        # 4. Color, Brightness & Contrast adjustment (sheet-level default)
+        im = adjust(im, p["brightness"], p["contrast"], p["bw"])
+        processed_photos[target_path] = im
+        return im
 
     sheet = Image.new("RGB", (mm(page_w), mm(page_h)), "white")
     draw = ImageDraw.Draw(sheet)
-    cache: Dict[Tuple[int, int], Image.Image] = {}
+    # Cache key: (item_idx, w_px, h_px) so different items with same size retain independent photos/crops!
+    cache: Dict[Tuple[int, int, int], Image.Image] = {}
     line = max(1, dpi // 150)
 
     for idx, x, y, w, h in placements:
-        key = (mm(w), mm(h))
-        if key not in cache:
-            cache[key] = crop_frame(photo, key[0], key[1], p["zoom"], p["ox"], p["oy"])
+        it_cfg = items[idx]
+        w_px, h_px = mm(w), mm(h)
+        cache_key = (idx, w_px, h_px)
+
+        if cache_key not in cache:
+            base_photo = get_base_photo_for_item(it_cfg)
+            item_zoom = it_cfg.get("zoom", p["zoom"])
+            item_ox = it_cfg.get("ox", p["ox"])
+            item_oy = it_cfg.get("oy", p["oy"])
+
+            cropped = crop_frame(base_photo, w_px, h_px, item_zoom, item_ox, item_oy)
+
+            # Check if this item has row-level B&W override
+            if it_cfg.get("bw") is True and not p["bw"]:
+                cropped = ImageOps.grayscale(cropped).convert("RGB")
+
+            cache[cache_key] = cropped
+
         px, py = mm(x), mm(y)
-        sheet.paste(cache[key], (px, py))
+        sheet.paste(cache[cache_key], (px, py))
         if p["border"]:
-            draw.rectangle([px, py, px + key[0] - 1, py + key[1] - 1], outline="#9ca3af", width=line)
+            draw.rectangle([px, py, px + w_px - 1, py + h_px - 1], outline="#9ca3af", width=line)
 
     placed = [0] * len(items)
     for idx, *_ in placements:

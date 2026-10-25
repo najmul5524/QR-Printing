@@ -1370,12 +1370,24 @@ def preview_page(
 
 @app.post("/api/studio-preview")
 def studio_preview(payload: dict = Body(...)):
-    """Live preview of the photo sheet (passport / stamp / custom sizes in rows)."""
+    """Live preview of the photo sheet (passport / stamp / custom sizes in rows, multi-photo support)."""
     src = resolve_upload(payload.get("file_id", ""))
     if utils.get_ext(src) not in ("jpg", "jpeg", "png"):
         raise HTTPException(status_code=400, detail="Only images can be used in the photo studio")
     params = studio.sanitize_params(payload.get("params"))
-    sheet, info = studio.render_sheet(src, params, dpi=100)
+
+    # Resolve all uploaded photos for multi-photo sheets
+    photos_map = {str(payload.get("file_id", "")): src}
+    extra_photos = payload.get("photos") or params.get("photos") or []
+    for fid in extra_photos:
+        try:
+            p_src = resolve_upload(str(fid))
+            if utils.get_ext(p_src) in ("jpg", "jpeg", "png"):
+                photos_map[str(fid)] = p_src
+        except Exception:
+            pass
+
+    sheet, info = studio.render_sheet(src, params, dpi=100, photos_map=photos_map)
     buf = io.BytesIO()
     sheet.save(buf, "JPEG", quality=85)
     return Response(content=buf.getvalue(), media_type="image/jpeg",
@@ -1874,12 +1886,23 @@ async def customer_create_order(request: Request):
         sp = studio.sanitize_params(data.get("studio"))
         file_path = os.path.join(UPLOAD_DIR, f"studio_{os.path.splitext(file_id)[0]}.pdf")
 
+        photos_map = {file_id: src}
+        extra_photos = sp.get("photos") or []
+        for fid in extra_photos:
+            try:
+                p_src = resolve_upload(str(fid))
+                if utils.get_ext(p_src) in ("jpg", "jpeg", "png"):
+                    photos_map[str(fid)] = p_src
+            except Exception:
+                pass
+
         def _build():
-            sheet, _info = studio.render_sheet(src, sp, dpi=300)
+            sheet, _info = studio.render_sheet(src, sp, dpi=300, photos_map=photos_map)
             studio.save_sheet_pdf(sheet, file_path, 300)
 
         await asyncio.to_thread(_build)
-        utils.secure_delete_file(src)
+        for p_to_clean in set(photos_map.values()):
+            utils.secure_delete_file(p_to_clean)
         file_type, page_count = "pdf", 1
         color_mode = "bw" if sp["bw"] else "color"
         duplex = "single"
