@@ -2246,6 +2246,75 @@ async def admin_upload_transfer(
     return {"success": True, "transfer": _transfer_dict(t, request)}
 
 
+@app.get("/admin/transfer/{transfer_id}/view")
+async def admin_view_transfer(transfer_id: str, request: Request):
+    shop = get_current_shop(request)
+    if not shop:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    t = db.get_transfer(transfer_id.upper())
+    if not t or t["shop_id"] != shop["id"]:
+        raise HTTPException(status_code=404, detail="File not found or expired")
+    if not os.path.isfile(t["stored_path"]):
+        await asyncio.to_thread(storage.ensure_local_from_r2, t["stored_path"])
+    if not os.path.isfile(t["stored_path"]):
+        raise HTTPException(status_code=404, detail="File not found or expired")
+
+    orig_name = t["original_filename"]
+    ext = utils.get_ext(orig_name).lower()
+    mtype = mimetypes.guess_type(orig_name)[0] or "application/octet-stream"
+
+    # If it is an Office document (Word, Excel, PPT), convert to PDF for inline preview
+    import office_docs
+    if ext in office_docs.OFFICE_EXTENSIONS:
+        pdf_cache = os.path.join(TRANSFER_DIR, f"{t['id']}_preview.pdf")
+        if not os.path.isfile(pdf_cache):
+            state_cache = os.path.join(TRANSFER_DIR, f"{t['id']}_state.json")
+            tmp_office_path = os.path.join(TRANSFER_DIR, f"{t['id']}_raw.{ext}")
+            try:
+                if not os.path.isfile(tmp_office_path):
+                    shutil.copy2(t["stored_path"], tmp_office_path)
+                await asyncio.to_thread(
+                    office_docs.convert_office_file_to_pdf_and_state,
+                    tmp_office_path, ext, orig_name, pdf_cache, state_cache
+                )
+            except Exception as e:
+                logger.error(f"Failed to convert office transfer {t['id']} for preview: {e}")
+            finally:
+                utils.secure_delete_file(tmp_office_path)
+        if os.path.isfile(pdf_cache):
+            return FileResponse(
+                pdf_cache,
+                media_type="application/pdf",
+                content_disposition_type="inline"
+            )
+
+    if storage.is_r2_configured():
+        r2_url = await asyncio.to_thread(
+            storage.get_r2_url_for_local_path, t["stored_path"], orig_name, True, mtype
+        )
+        if r2_url:
+            return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
+
+    if ext in {"jpg", "jpeg"}:
+        mtype = "image/jpeg"
+    elif ext == "png":
+        mtype = "image/png"
+    elif ext == "webp":
+        mtype = "image/webp"
+    elif ext == "gif":
+        mtype = "image/gif"
+    elif ext == "pdf":
+        mtype = "application/pdf"
+    elif ext in {"txt", "csv", "log", "json"}:
+        mtype = "text/plain; charset=utf-8"
+
+    return FileResponse(
+        t["stored_path"],
+        media_type=mtype,
+        content_disposition_type="inline"
+    )
+
+
 @app.get("/admin/transfer/{transfer_id}/download")
 async def admin_download_transfer(transfer_id: str, request: Request):
     shop = get_current_shop(request)
