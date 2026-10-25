@@ -4,21 +4,51 @@ import secrets
 import hashlib
 import hmac
 import math
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
+from cryptography.fernet import Fernet
 
-# ── Password Hashing & Verification (PBKDF2-HMAC-SHA256 with Salt) ──
+# ── Reversible AES-256 / Fernet Encryption for Passwords ──
+APP_SALT = b"qrprint_secure_salt_v1_2026_bd"
+raw_cipher_secret = os.environ.get("DB_ENCRYPTION_KEY") or os.environ.get("SUPERADMIN_PASSWORD") or "qrprint_super_secret_cipher_key_default"
+derived_cipher_key = base64.urlsafe_b64encode(hashlib.pbkdf2_hmac("sha256", raw_cipher_secret.encode("utf-8"), APP_SALT, 50_000))
+_cipher = Fernet(derived_cipher_key)
+
+def encrypt_password(password: str) -> str:
+    """Encrypts password using AES (Fernet) so it is safe in DB but decipherable for Super Admin."""
+    if not password:
+        return ""
+    if password.startswith("enc$"):
+        return password
+    token = _cipher.encrypt(password.encode("utf-8")).decode("utf-8")
+    return f"enc${token}"
+
+def decrypt_password(stored_password: str) -> str:
+    """Decrypts AES-encrypted password to plain text for Super Admin view & copy."""
+    if not stored_password:
+        return ""
+    if stored_password.startswith("enc$"):
+        try:
+            token = stored_password[4:]
+            return _cipher.decrypt(token.encode("utf-8")).decode("utf-8")
+        except Exception:
+            return stored_password
+    if stored_password.startswith("pbkdf2_sha256$"):
+        return "[লকড / এডিটে নতুন দিন]"
+    return stored_password
+
 def hash_password(password: str) -> str:
-    """Hashes password using PBKDF2-HMAC-SHA256 with 100,000 rounds and random salt."""
-    salt = secrets.token_hex(16)
-    iterations = 100_000
-    hash_bytes = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
-    return f"pbkdf2_sha256${iterations}${salt}${hash_bytes.hex()}"
+    """Alias for encrypt_password for backward compatibility."""
+    return encrypt_password(password)
 
 def verify_password(stored_password: str, provided_password: str) -> bool:
-    """Verifies password against stored PBKDF2 hash or legacy plaintext with constant-time compare."""
+    """Verifies password against stored AES ciphertext, PBKDF2 hash, or legacy plaintext."""
     if not stored_password or not provided_password:
         return False
+    if stored_password.startswith("enc$"):
+        dec = decrypt_password(stored_password)
+        return hmac.compare_digest(dec, provided_password)
     if stored_password.startswith("pbkdf2_sha256$"):
         try:
             _, iter_str, salt, expected_hex = stored_password.split("$")
@@ -184,6 +214,21 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_phone', ?)", (default_sa_phone,))
     cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (hashed_sa_pass,))
 
+    # Auto-migrate any unencrypted passwords to AES encryption
+    try:
+        shops_to_migrate = cursor.execute("SELECT id, password FROM shops").fetchall()
+        for s in shops_to_migrate:
+            pw = s["password"] or ""
+            if pw and not pw.startswith("enc$") and not pw.startswith("pbkdf2_sha256$"):
+                cursor.execute("UPDATE shops SET password = ? WHERE id = ?", (encrypt_password(pw), s["id"]))
+        sa_row = cursor.execute("SELECT value FROM system_settings WHERE key = 'superadmin_password'").fetchone()
+        if sa_row:
+            sa_pw = sa_row["value"] or ""
+            if sa_pw and not sa_pw.startswith("enc$") and not sa_pw.startswith("pbkdf2_sha256$"):
+                cursor.execute("UPDATE system_settings SET value = ? WHERE key = 'superadmin_password'", (encrypt_password(sa_pw),))
+    except Exception as e:
+        pass
+
     conn.commit()
     
     # Seed a demo shop if no shops exist
@@ -215,10 +260,18 @@ def init_db():
 def get_shop_by_code(shop_code: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM shops WHERE shop_code = ? AND is_active = 1", (shop_code,))
+    clean = (shop_code or "").strip().lower()
+    cursor.execute("SELECT * FROM shops WHERE LOWER(shop_code) = ? AND is_active = 1", (clean,))
     shop = cursor.fetchone()
+    if not shop:
+        cursor.execute("SELECT * FROM shops WHERE LOWER(shop_code) = ?", (clean,))
+        shop = cursor.fetchone()
     conn.close()
-    return dict(shop) if shop else None
+    if shop:
+        d = dict(shop)
+        d["password"] = decrypt_password(d.get("password") or "")
+        return d
+    return None
 
 def get_shop_by_id(shop_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db()
@@ -226,7 +279,11 @@ def get_shop_by_id(shop_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute("SELECT * FROM shops WHERE id = ?", (shop_id,))
     shop = cursor.fetchone()
     conn.close()
-    return dict(shop) if shop else None
+    if shop:
+        d = dict(shop)
+        d["password"] = decrypt_password(d.get("password") or "")
+        return d
+    return None
 
 def get_shop_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
@@ -247,12 +304,14 @@ def authenticate_shop(phone: str, password: str) -> Optional[Dict[str, Any]]:
     rows = cursor.fetchall()
     for row in rows:
         if verify_password(row["password"], password.strip()):
-            if not row["password"].startswith("pbkdf2_sha256$"):
-                new_hash = hash_password(password.strip())
-                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_hash, row["id"]))
+            if not row["password"].startswith("enc$"):
+                new_enc = encrypt_password(password.strip())
+                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_enc, row["id"]))
                 conn.commit()
             conn.close()
-            return dict(row)
+            d = dict(row)
+            d["password"] = password.strip()
+            return d
     conn.close()
     return None
 
@@ -264,12 +323,14 @@ def get_shop_by_credentials_any_status(phone: str, password: str) -> Optional[Di
     rows = cursor.fetchall()
     for row in rows:
         if verify_password(row["password"], password.strip()):
-            if not row["password"].startswith("pbkdf2_sha256$"):
-                new_hash = hash_password(password.strip())
-                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_hash, row["id"]))
+            if not row["password"].startswith("enc$"):
+                new_enc = encrypt_password(password.strip())
+                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_enc, row["id"]))
                 conn.commit()
             conn.close()
-            return dict(row)
+            d = dict(row)
+            d["password"] = password.strip()
+            return d
     conn.close()
     return None
 
@@ -702,9 +763,10 @@ def get_superadmin_credentials() -> Dict[str, str]:
     rows = conn.execute("SELECT key, value FROM system_settings WHERE key IN ('superadmin_phone', 'superadmin_password')").fetchall()
     conn.close()
     data = {r["key"]: r["value"] for r in rows}
+    raw_pass = data.get("superadmin_password") or os.environ.get("SUPERADMIN_PASSWORD", "admin123456").strip()
     return {
         "phone": data.get("superadmin_phone") or os.environ.get("SUPERADMIN_PHONE", "01900000000").strip(),
-        "password": data.get("superadmin_password") or os.environ.get("SUPERADMIN_PASSWORD", "admin123456").strip(),
+        "password": decrypt_password(raw_pass),
     }
 
 
@@ -724,7 +786,7 @@ def authenticate_superadmin(phone: str, password: str) -> bool:
     p = (phone or "").strip()
     pw = (password or "").strip()
     if p == creds["phone"] and verify_password(creds["password"], pw):
-        if not creds["password"].startswith("pbkdf2_sha256$"):
+        if not creds["password"].startswith("enc$"):
             update_superadmin_credentials(p, pw)
         return True
     if env_phone and env_pass and p == env_phone and verify_password(env_pass, pw):
@@ -742,7 +804,12 @@ def get_all_shops_with_stats() -> List[Dict[str, Any]]:
         ORDER BY s.id DESC
     """).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["password"] = decrypt_password(d.get("password") or "")
+        res.append(d)
+    return res
 
 
 def update_shop_by_superadmin(shop_id: int, shop_code: str, name: str, owner_name: str, phone: str, password: str, is_active: int = 1):
