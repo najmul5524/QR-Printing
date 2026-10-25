@@ -1049,6 +1049,11 @@ async def upload_file(file: UploadFile = File(...)):
         save_path = os.path.join(UPLOAD_DIR, file_id)
         state_path = os.path.join(UPLOAD_DIR, f"office_{fid}.json")
         try:
+            raw_backup = os.path.join(UPLOAD_DIR, f"raw_{fid}.{ext}")
+            shutil.copy2(raw_path, raw_backup)
+        except Exception:
+            pass
+        try:
             info = await asyncio.to_thread(
                 office_docs.convert_office_file_to_pdf_and_state,
                 raw_path, ext, orig_safe_name, save_path, state_path
@@ -1149,6 +1154,12 @@ async def save_office_editable_content(payload: dict = Body(...)):
 
     pages = await asyncio.to_thread(office_docs.render_html_to_pdf, html_body, src, orientation, margins_tuple)
     _update_orig_backup(src)
+    try:
+        flag_p = os.path.join(UPLOAD_DIR, f"edited_{fid}.flag")
+        with open(flag_p, "w", encoding="utf-8") as flg:
+            flg.write("1")
+    except Exception:
+        pass
     return {
         "success": True,
         "file_id": file_id,
@@ -1969,6 +1980,17 @@ async def download_print_file(order_id: str, key: str):
         await asyncio.to_thread(storage.ensure_local_from_r2, order["file_path"])
     if not os.path.exists(order["file_path"]):
         raise HTTPException(status_code=404, detail="File has already been securely removed")
+
+    # If unedited original Office document exists, serve it directly so Windows agent prints via native Office COM (100% fidelity)
+    base_fid = os.path.splitext(os.path.basename(order["file_path"]))[0]
+    edited_flag = os.path.join(UPLOAD_DIR, f"edited_{base_fid}.flag")
+    if not os.path.isfile(edited_flag):
+        for raw_ext in ("docx", "doc", "rtf", "xlsx", "xls", "pptx", "ppt"):
+            raw_cand = os.path.join(UPLOAD_DIR, f"raw_{base_fid}.{raw_ext}")
+            if os.path.isfile(raw_cand):
+                raw_dl_name = os.path.splitext(dl_name)[0] + f".{raw_ext}"
+                raw_mtype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if raw_ext == "docx" else "application/octet-stream"
+                return FileResponse(raw_cand, filename=raw_dl_name, media_type=raw_mtype)
         
     return FileResponse(order["file_path"], filename=dl_name, media_type=mtype)
 

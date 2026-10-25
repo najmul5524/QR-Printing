@@ -188,6 +188,31 @@ def print_file_windows(file_path: str, copies: int = 1, config: dict = None) -> 
 
         ext = os.path.splitext(file_path)[1].lower()
 
+        # Layer 0: Direct Microsoft Word COM printing (100% Microsoft 365 Fidelity)
+        if ext in (".doc", ".docx", ".rtf"):
+            try:
+                import win32com.client
+                import pythoncom
+                pythoncom.CoInitialize()
+                word = win32com.client.DispatchEx("Word.Application")
+                word.Visible = False
+                word.DisplayAlerts = 0
+                if printer_name:
+                    try:
+                        word.ActivePrinter = printer_name
+                    except Exception:
+                        pass
+                doc = word.Documents.Open(os.path.abspath(file_path), False, True)
+                for _ in range(copies):
+                    doc.PrintOut(False)
+                doc.Close(0)
+                word.Quit()
+                pythoncom.CoUninitialize()
+                print(f"[V] Printed directly via Microsoft Word COM (100% Native Fidelity)!")
+                return True
+            except Exception as word_err:
+                print(f"[i] Microsoft Word COM direct print note: {word_err}")
+
         # Layer 1: SumatraPDF
         sumatra = find_sumatra(config)
         if sumatra and ext in (".pdf", ".jpg", ".jpeg", ".png"):

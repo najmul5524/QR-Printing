@@ -2842,19 +2842,22 @@
     const colIdx = td.cellIndex;
     const tbl = td.closest('table');
     if (!tbl) return;
-    const currentW = td.offsetWidth || 50;
-    const newW = Math.max(25, currentW + delta);
-    const tblW = tbl.offsetWidth || 500;
-    const newPct = Math.max(3, Math.min(85, (newW / tblW) * 100));
     const cg = tbl.querySelector('colgroup');
-    if (cg && cg.children[colIdx]) {
-      cg.children[colIdx].style.width = newPct.toFixed(2) + '%';
-    }
-    tbl.querySelectorAll('tr').forEach(r => {
-      if (r.children[colIdx]) {
-        r.children[colIdx].style.width = newPct.toFixed(2) + '%';
-      }
-    });
+    if (!cg || !cg.children[colIdx]) return;
+    const totalCols = cg.children.length;
+    const nextIdx = (colIdx < totalCols - 1) ? (colIdx + 1) : (colIdx - 1);
+    if (nextIdx < 0 || nextIdx >= totalCols) return;
+
+    const tblW = tbl.offsetWidth || 500;
+    const deltaPct = (delta / tblW) * 100;
+    const p1 = parseFloat(cg.children[colIdx].style.width) || (100 / totalCols);
+    const p2 = parseFloat(cg.children[nextIdx].style.width) || (100 / totalCols);
+    const combined = p1 + p2;
+    const newP1 = Math.max(4, Math.min(combined - 4, p1 + deltaPct));
+    const newP2 = combined - newP1;
+
+    cg.children[colIdx].style.width = newP1.toFixed(2) + '%';
+    cg.children[nextIdx].style.width = newP2.toFixed(2) + '%';
   };
 
   function setupTableInteractiveResizer() {
@@ -2867,9 +2870,11 @@
     let activeCell = null;
     let activeRow = null;
     let startX = 0, startY = 0;
-    let startWidth = 0, startHeight = 0;
+    let startHeight = 0;
     let activeTable = null;
     let activeColIndex = 0;
+    let nextColIndex = -1;
+    let initPct1 = 0, initPct2 = 0, combinedPct = 0;
 
     area.addEventListener('mousemove', function(e) {
       if (resizingType) return;
@@ -2904,7 +2909,7 @@
         activeCell = td;
         activeRow = td.parentElement;
         startY = e.clientY;
-        startHeight = activeRow.offsetHeight;
+        startHeight = activeRow.offsetHeight || td.offsetHeight || 24;
         document.body.style.cursor = 'row-resize';
         document.body.style.userSelect = 'none';
       } else if (nearRight) {
@@ -2914,9 +2919,30 @@
         activeTable = td.closest('table');
         activeColIndex = td.cellIndex;
         startX = e.clientX;
-        startWidth = td.offsetWidth;
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
+
+        if (activeTable) {
+          let cg = activeTable.querySelector('colgroup');
+          if (!cg) {
+            cg = document.createElement('colgroup');
+            const colsCount = activeTable.rows[0] ? activeTable.rows[0].children.length : 1;
+            const initP = (100 / colsCount).toFixed(2);
+            for (let c = 0; c < colsCount; c++) {
+              const colEl = document.createElement('col');
+              colEl.style.width = initP + '%';
+              cg.appendChild(colEl);
+            }
+            activeTable.insertBefore(cg, activeTable.firstChild);
+          }
+          const totalCols = cg.children.length;
+          nextColIndex = (activeColIndex < totalCols - 1) ? (activeColIndex + 1) : -1;
+          if (nextColIndex >= 0) {
+            initPct1 = parseFloat(cg.children[activeColIndex].style.width) || (100 / totalCols);
+            initPct2 = parseFloat(cg.children[nextColIndex].style.width) || (100 / totalCols);
+            combinedPct = initPct1 + initPct2;
+          }
+        }
       }
     });
 
@@ -2929,20 +2955,17 @@
         Array.from(activeRow.children).forEach(cell => {
           cell.style.height = newH + 'px';
         });
-      } else if (resizingType === 'col' && activeCell && activeTable) {
+      } else if (resizingType === 'col' && activeCell && activeTable && nextColIndex >= 0) {
         const diffX = e.clientX - startX;
-        const newW = Math.max(25, startWidth + diffX);
         const tblWidth = activeTable.offsetWidth || 500;
-        const newPct = Math.max(4, Math.min(85, (newW / tblWidth) * 100));
+        const diffPct = (diffX / tblWidth) * 100;
         const cg = activeTable.querySelector('colgroup');
-        if (cg && cg.children[activeColIndex]) {
-          cg.children[activeColIndex].style.width = newPct.toFixed(2) + '%';
+        if (cg && cg.children[activeColIndex] && cg.children[nextColIndex]) {
+          const newPct1 = Math.max(4, Math.min(combinedPct - 4, initPct1 + diffPct));
+          const newPct2 = combinedPct - newPct1;
+          cg.children[activeColIndex].style.width = newPct1.toFixed(2) + '%';
+          cg.children[nextColIndex].style.width = newPct2.toFixed(2) + '%';
         }
-        activeTable.querySelectorAll('tr').forEach(r => {
-          if (r.children[activeColIndex]) {
-            r.children[activeColIndex].style.width = newPct.toFixed(2) + '%';
-          }
-        });
       }
     });
 

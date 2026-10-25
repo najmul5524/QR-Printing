@@ -773,7 +773,20 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                     chosen_pts = weights
 
                 total_grid_pt = sum(chosen_pts) or 1.0
-                target_w_pt = avail_w_pt
+                # Preserve original Word table width: do not force small tables to 100% width!
+                if specified_tbl_w_pt and 50 < specified_tbl_w_pt <= avail_w_pt:
+                    target_w_pt = specified_tbl_w_pt
+                    table_is_full_width = (specified_tbl_w_pt >= avail_w_pt * 0.92)
+                elif total_grid_pt >= avail_w_pt * 0.92:
+                    target_w_pt = avail_w_pt
+                    table_is_full_width = True
+                elif total_grid_pt > 50:
+                    target_w_pt = min(total_grid_pt, avail_w_pt)
+                    table_is_full_width = False
+                else:
+                    target_w_pt = avail_w_pt
+                    table_is_full_width = True
+
                 scale = target_w_pt / total_grid_pt
                 final_col_pts = [max(16.0, round(w * scale, 1)) for w in chosen_pts]
                 diff = target_w_pt - sum(final_col_pts)
@@ -912,9 +925,6 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                             "word-break:break-word",
                             "overflow-wrap:break-word",
                         ]
-                        if col_pcts and curr_col < len(col_pcts):
-                            pct_span = sum(col_pcts[curr_col : curr_col + colspan])
-                            c_styles.append(f"width:{pct_span:.2f}%")
                         if row_h_pt:
                             c_styles.append(f"height:{row_h_pt:.1f}pt")
                         if cell_bg:
@@ -949,7 +959,8 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                 elif tbl_align == "right":
                     margin_css = "margin:6px 0 6px auto;"
 
-                table_css = f"border-collapse:collapse; width:100%; table-layout:fixed; {margin_css} font-size:10pt;"
+                tbl_w_style = "width:100%;" if table_is_full_width else f"width:{target_w_pt:.1f}pt; max-width:100%;"
+                table_css = f"border-collapse:collapse; {tbl_w_style} table-layout:fixed; {margin_css} font-size:10pt;"
                 return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{colgroup_html}{"".join(t_rows)}</table>'
             for elem in body:
                 if elem.tag == f"{W_NS}p":
