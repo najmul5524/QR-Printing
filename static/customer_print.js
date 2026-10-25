@@ -2908,6 +2908,7 @@
         resizingType = 'row';
         activeCell = td;
         activeRow = td.parentElement;
+        activeTable = td.closest('table');
         startY = e.clientY;
         startHeight = activeRow.offsetHeight || td.offsetHeight || 24;
         document.body.style.cursor = 'row-resize';
@@ -2958,6 +2959,8 @@
         activeRow.style.height = newH + 'px';
         Array.from(activeRow.children).forEach(cell => {
           cell.style.height = newH + 'px';
+          cell.style.border = '1px solid #1e293b';
+          cell.style.boxSizing = 'border-box';
         });
       } else if (resizingType === 'col' && activeCell && activeTable && nextColIndex >= 0) {
         const diffX = e.clientX - startX;
@@ -3062,7 +3065,19 @@
         syncActiveExcelDomToState();
       } else {
         const wordArea = $('wordEditorArea');
-        if (wordArea) officeEditorState.html = wordArea.innerHTML;
+        if (wordArea) {
+          const allTables = wordArea.querySelectorAll('table');
+          allTables.forEach(tbl => {
+            tbl.style.borderCollapse = 'collapse';
+            tbl.style.maxWidth = '100%';
+            const cells = tbl.querySelectorAll('td, th');
+            cells.forEach(c => {
+              c.style.border = '1px solid #1e293b';
+              c.style.boxSizing = 'border-box';
+            });
+          });
+          officeEditorState.html = wordArea.innerHTML;
+        }
       }
 
       const res = await fetch('/api/office/save', {

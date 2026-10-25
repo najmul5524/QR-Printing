@@ -1543,16 +1543,29 @@ def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "", orientation: s
     return "\n".join(blocks) if blocks else "<p>&nbsp;</p>"
 
 
+def _rgb_match_to_hex(m):
+    r = int(m.group(1))
+    g = int(m.group(2))
+    b = int(m.group(3))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def sanitize_story_html(html: str) -> str:
     """
     Sanitizes HTML before feeding to PyMuPDF Story:
-    1. Ensures all <table> elements have border-collapse: collapse; max-width: 100%;
-    2. Ensures all <td> and <th> elements preserve crisp borders (border: 1px solid #1e293b)
+    1. Converts all rgb(r,g,b) and rgba(r,g,b,a) color declarations to #rrggbb hex,
+       because PyMuPDF Story's CSS parser drops border declarations containing rgb/rgba!
+    2. Ensures all <table> elements have border-collapse: collapse; max-width: 100%;
+    3. Ensures all <td> and <th> elements preserve crisp borders (border: 1px solid #1e293b)
        and removes any accidental 'border:none' or 'border:0' from editor operations.
     """
     if not html:
         return html
 
+    # 1. Convert rgb(...) and rgba(...) to #rrggbb hex colors
+    html = re.sub(r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)', _rgb_match_to_hex, html, flags=re.IGNORECASE)
+
+    # 2. Table styling
     def clean_table(m):
         attrs = m.group(1)
         if 'border-collapse' not in attrs:
@@ -1566,18 +1579,19 @@ def sanitize_story_html(html: str) -> str:
 
     html = re.sub(r'<table\s+([^>]+)>', clean_table, html, flags=re.IGNORECASE)
 
+    # 3. Clean td/th cells (including bare <td> and <th>)
     def clean_cell(m):
         tag = m.group(1)
-        attrs = m.group(2)
+        attrs = m.group(2) or ""
         attrs = re.sub(r'border\s*:\s*(none|0|transparent)[^;]*;?', '', attrs, flags=re.IGNORECASE)
-        if 'border:' not in attrs and 'border-width:' not in attrs:
+        if 'border:' not in attrs and 'border-width:' not in attrs and 'border-top:' not in attrs:
             if 'style="' in attrs:
                 attrs = re.sub(r'style="([^"]*)"', r'style="border:1px solid #1e293b; \1"', attrs)
             else:
                 attrs += ' style="border:1px solid #1e293b;"'
         return f'<{tag} {attrs}>'
 
-    html = re.sub(r'<(td|th)\s+([^>]+)>', clean_cell, html, flags=re.IGNORECASE)
+    html = re.sub(r'<(td|th)(?:\s+([^>]*))?>', clean_cell, html, flags=re.IGNORECASE)
     return html
 
 
