@@ -101,6 +101,53 @@
       </div>
     {% endif %}
 
+    <!-- ═════════ SECURITY & LOCKED ACCOUNTS (SUPER ADMIN UNLOCK CONTROL) ═════════ -->
+    <div class="bg-white rounded-2xl border-2 {{ 'border-red-400 shadow-md' if locked_accounts and locked_accounts|length > 0 else 'border-slate-200 shadow-sm' }} overflow-hidden">
+      <div class="px-5 py-3.5 {{ 'bg-gradient-to-r from-red-600 to-rose-600 text-white' if locked_accounts and locked_accounts|length > 0 else 'bg-slate-100 text-gray-800' }} flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">🔒</span>
+          <div>
+            <h2 class="font-bold text-sm sm:text-base">নিরাপত্তা ও লকড অ্যাকাউন্ট নিয়ন্ত্রণ (ভুল পাসওয়ার্ড ট্র্যাকার)</h2>
+            <p class="text-[11px] {{ 'text-red-100' if locked_accounts and locked_accounts|length > 0 else 'text-gray-500' }}">
+              পরপর ৫ বার ভুল পাসওয়ার্ড দিলে অ্যাকাউন্ট ১০ মিনিটের জন্য লক হয়। আপনি যেকোনো সময় নিচের তালিকা বা বক্স থেকে তাৎক্ষণিক <b>লক ছাড়তে (Unlock)</b> পারবেন।
+            </p>
+          </div>
+        </div>
+        <form action="/superadmin/unlock" method="POST" class="flex items-center gap-2 text-xs">
+          <input type="text" name="identifier" placeholder="মোবাইল নম্বর দিয়ে আনলক..." required class="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-900 bg-white outline-none w-48 text-xs font-mono">
+          <button type="submit" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-xs transition">🔓 আনলক</button>
+        </form>
+      </div>
+
+      {% if locked_accounts and locked_accounts|length > 0 %}
+        <div class="divide-y divide-red-100 bg-red-50/40 p-4 space-y-2">
+          {% for lk in locked_accounts %}
+            <div class="p-3 bg-white rounded-xl border border-red-200 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs">
+              <div>
+                <p class="font-extrabold text-sm text-gray-900 font-mono flex items-center gap-1.5">
+                  <span>📱 {{ lk.identifier }}</span>
+                  <span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">লকড স্টেট</span>
+                </p>
+                <p class="text-[11px] text-gray-500 mt-0.5">
+                  ভুল চেষ্টা: <b class="text-red-600">{{ lk.failed_attempts }} বার</b> • আইপি: {{ lk.ip_address or 'অজানা' }} • শেষ চেষ্টা: {{ lk.last_attempt }}
+                </p>
+              </div>
+              <form action="/superadmin/unlock" method="POST" class="inline">
+                <input type="hidden" name="identifier" value="{{ lk.identifier }}">
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow transition flex items-center gap-1">
+                  <span>🔓</span> <span>তাৎক্ষণিক লক ছাড়ুন (Unlock Now)</span>
+                </button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="p-4 bg-emerald-50/50 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+          <span>✅</span> <span>বর্তমানে কোনো অ্যাকাউন্ট লকড নেই। সব লগইন স্বাভাবিক ও নিরাপদ।</span>
+        </div>
+      {% endif %}
+    </div>
+
     <!-- ═════════ PENDING SHOP REGISTRATION REQUESTS (WAITING FOR ALLOW) ═════════ -->
     <div class="bg-white rounded-2xl border-2 {{ 'border-amber-400 shadow-md' if pending_shops and pending_shops|length > 0 else 'border-slate-200 shadow-sm' }} overflow-hidden">
       <div class="px-5 py-3.5 {{ 'bg-gradient-to-r from-amber-500 to-orange-500 text-white' if pending_shops and pending_shops|length > 0 else 'bg-slate-100 text-gray-800' }} flex flex-wrap items-center justify-between gap-2">

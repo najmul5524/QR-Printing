@@ -38,7 +38,8 @@ NID_W, NID_H = mm_to_px(NID_W_MM), mm_to_px(NID_H_MM)  # 1011 x 638 px
 BLOCKED_EXTENSIONS = {
     "exe", "bat", "cmd", "com", "msi", "scr", "pif", "vbs", "vbe", "js", "jse",
     "wsf", "wsh", "ps1", "psm1", "jar", "dll", "sys", "lnk", "reg", "hta", "cpl",
-    "apk", "app", "dmg", "sh",
+    "apk", "app", "dmg", "sh", "html", "htm", "svg", "xhtml", "shtml", "php", "phtml",
+    "jsp", "asp", "aspx", "cgi", "pl", "py"
 }
 
 

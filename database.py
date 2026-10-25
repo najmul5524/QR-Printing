@@ -1,8 +1,33 @@
 import sqlite3
 import os
 import secrets
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+import hashlib
+import hmac
+import math
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any, List, Tuple
+
+# ── Password Hashing & Verification (PBKDF2-HMAC-SHA256 with Salt) ──
+def hash_password(password: str) -> str:
+    """Hashes password using PBKDF2-HMAC-SHA256 with 100,000 rounds and random salt."""
+    salt = secrets.token_hex(16)
+    iterations = 100_000
+    hash_bytes = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${hash_bytes.hex()}"
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    """Verifies password against stored PBKDF2 hash or legacy plaintext with constant-time compare."""
+    if not stored_password or not provided_password:
+        return False
+    if stored_password.startswith("pbkdf2_sha256$"):
+        try:
+            _, iter_str, salt, expected_hex = stored_password.split("$")
+            iterations = int(iter_str)
+            computed = hashlib.pbkdf2_hmac("sha256", provided_password.encode("utf-8"), salt.encode("utf-8"), iterations)
+            return hmac.compare_digest(computed.hex(), expected_hex)
+        except Exception:
+            return False
+    return hmac.compare_digest(stored_password, provided_password)
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -143,10 +168,21 @@ def init_db():
         value TEXT NOT NULL
     );
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS login_lockouts (
+        identifier TEXT PRIMARY KEY,
+        failed_attempts INTEGER DEFAULT 0,
+        locked_until TEXT DEFAULT '',
+        last_attempt TEXT NOT NULL,
+        ip_address TEXT DEFAULT ''
+    );
+    """)
+
     default_sa_phone = os.environ.get("SUPERADMIN_PHONE", "01900000000").strip()
     default_sa_pass = os.environ.get("SUPERADMIN_PASSWORD", "admin123456").strip()
+    hashed_sa_pass = hash_password(default_sa_pass)
     cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_phone', ?)", (default_sa_phone,))
-    cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (default_sa_pass,))
+    cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (hashed_sa_pass,))
 
     conn.commit()
     
@@ -165,7 +201,7 @@ def init_db():
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """, (
-            "demo101", "সততা ফটোকপি ও প্রিন্ট জোন", "রফিকুল ইসলাম", "01700000000", "123456", demo_api_key,
+            "demo101", "সততা ফটোকপি ও প্রিন্ট জোন", "রফিকুল ইসলাম", "01700000000", hash_password("123456"), demo_api_key,
             "01700000000", "01700000000", 1,
             3.0, 5.0, 10.0, 18.0, 30.0,
             now
@@ -207,19 +243,35 @@ def get_shop_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
 def authenticate_shop(phone: str, password: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM shops WHERE phone = ? AND password = ? AND is_active = 1", (phone, password))
-    shop = cursor.fetchone()
+    cursor.execute("SELECT * FROM shops WHERE phone = ? AND is_active = 1", (phone.strip(),))
+    rows = cursor.fetchall()
+    for row in rows:
+        if verify_password(row["password"], password.strip()):
+            if not row["password"].startswith("pbkdf2_sha256$"):
+                new_hash = hash_password(password.strip())
+                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_hash, row["id"]))
+                conn.commit()
+            conn.close()
+            return dict(row)
     conn.close()
-    return dict(shop) if shop else None
+    return None
 
 
 def get_shop_by_credentials_any_status(phone: str, password: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM shops WHERE phone = ? AND password = ?", (phone, password))
-    shop = cursor.fetchone()
+    cursor.execute("SELECT * FROM shops WHERE phone = ?", (phone.strip(),))
+    rows = cursor.fetchall()
+    for row in rows:
+        if verify_password(row["password"], password.strip()):
+            if not row["password"].startswith("pbkdf2_sha256$"):
+                new_hash = hash_password(password.strip())
+                conn.execute("UPDATE shops SET password = ? WHERE id = ?", (new_hash, row["id"]))
+                conn.commit()
+            conn.close()
+            return dict(row)
     conn.close()
-    return dict(shop) if shop else None
+    return None
 
 def update_shop_settings(shop_id: int, data: Dict[str, Any]):
     conn = get_db()
@@ -658,8 +710,9 @@ def get_superadmin_credentials() -> Dict[str, str]:
 
 def update_superadmin_credentials(phone: str, password: str):
     conn = get_db()
+    hashed = hash_password(password.strip()) if not password.startswith("pbkdf2_sha256$") else password.strip()
     conn.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('superadmin_phone', ?)", (phone.strip(),))
-    conn.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (password.strip(),))
+    conn.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('superadmin_password', ?)", (hashed,))
     conn.commit()
     conn.close()
 
@@ -670,9 +723,11 @@ def authenticate_superadmin(phone: str, password: str) -> bool:
     env_pass = os.environ.get("SUPERADMIN_PASSWORD", "").strip()
     p = (phone or "").strip()
     pw = (password or "").strip()
-    if p == creds["phone"] and pw == creds["password"]:
+    if p == creds["phone"] and verify_password(creds["password"], pw):
+        if not creds["password"].startswith("pbkdf2_sha256$"):
+            update_superadmin_credentials(p, pw)
         return True
-    if env_phone and env_pass and p == env_phone and pw == env_pass:
+    if env_phone and env_pass and p == env_phone and verify_password(env_pass, pw):
         return True
     return False
 
@@ -692,11 +747,12 @@ def get_all_shops_with_stats() -> List[Dict[str, Any]]:
 
 def update_shop_by_superadmin(shop_id: int, shop_code: str, name: str, owner_name: str, phone: str, password: str, is_active: int = 1):
     conn = get_db()
+    hashed = hash_password(password.strip()) if not password.startswith("pbkdf2_sha256$") else password.strip()
     conn.execute("""
         UPDATE shops
         SET shop_code = ?, name = ?, owner_name = ?, phone = ?, password = ?, is_active = ?
         WHERE id = ?
-    """, (shop_code.strip().lower(), name.strip(), owner_name.strip(), phone.strip(), password.strip(), 1 if is_active else 0, shop_id))
+    """, (shop_code.strip().lower(), name.strip(), owner_name.strip(), phone.strip(), hashed, 1 if is_active else 0, shop_id))
     conn.commit()
     conn.close()
 
@@ -716,3 +772,91 @@ def delete_shop_by_superadmin(shop_id: int):
     conn.execute("DELETE FROM shops WHERE id = ?", (shop_id,))
     conn.commit()
     conn.close()
+
+
+# ── Login Rate Limiting & Account Lockout (5 attempts -> 10 mins lock) ──
+def is_account_locked(identifier: str) -> Tuple[bool, int]:
+    """Checks if account is locked. Returns (is_locked, remaining_minutes)."""
+    if not identifier:
+        return False, 0
+    clean_id = identifier.strip().lower()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM login_lockouts WHERE identifier = ?", (clean_id,)).fetchone()
+    conn.close()
+    if not row or not row["locked_until"]:
+        return False, 0
+    now = datetime.now(timezone.utc)
+    try:
+        locked_until = datetime.fromisoformat(row["locked_until"])
+        if locked_until > now:
+            remaining_secs = (locked_until - now).total_seconds()
+            return True, max(1, int(math.ceil(remaining_secs / 60.0)))
+    except Exception:
+        pass
+    return False, 0
+
+
+def record_login_failure(identifier: str, ip: str = "") -> Tuple[int, bool, int]:
+    """Records failed attempt. If >= 5, locks for 10 minutes. Returns (attempts, is_locked, lock_mins)."""
+    if not identifier:
+        return 1, False, 0
+    clean_id = identifier.strip().lower()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM login_lockouts WHERE identifier = ?", (clean_id,)).fetchone()
+    now = datetime.now(timezone.utc)
+    
+    attempts = (row["failed_attempts"] if row else 0) + 1
+    locked_until_str = ""
+    is_locked = False
+    lock_mins = 0
+
+    if attempts >= 5:
+        is_locked = True
+        lock_mins = 10
+        locked_until = now + timedelta(minutes=10)
+        locked_until_str = locked_until.isoformat()
+
+    conn.execute("""
+    INSERT INTO login_lockouts (identifier, failed_attempts, locked_until, last_attempt, ip_address)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(identifier) DO UPDATE SET
+        failed_attempts = ?,
+        locked_until = ?,
+        last_attempt = ?,
+        ip_address = ?
+    """, (clean_id, attempts, locked_until_str, now.isoformat(), ip, attempts, locked_until_str, now.isoformat(), ip))
+    conn.commit()
+    conn.close()
+    return attempts, is_locked, lock_mins
+
+
+def record_login_success(identifier: str):
+    """Clears failed login attempts for an identifier on successful login."""
+    if not identifier:
+        return
+    clean_id = identifier.strip().lower()
+    conn = get_db()
+    conn.execute("DELETE FROM login_lockouts WHERE identifier = ?", (clean_id,))
+    conn.commit()
+    conn.close()
+
+
+def list_locked_accounts() -> List[Dict[str, Any]]:
+    """Returns list of currently locked accounts for Super Admin dashboard."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM login_lockouts WHERE locked_until > ? ORDER BY last_attempt DESC", (now_iso,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def unlock_account(identifier: str) -> bool:
+    """Instantly unlocks an account by Super Admin."""
+    if not identifier:
+        return False
+    clean_id = identifier.strip().lower()
+    conn = get_db()
+    conn.execute("DELETE FROM login_lockouts WHERE identifier = ?", (clean_id,))
+    conn.commit()
+    conn.close()
+    return True

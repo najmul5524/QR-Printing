@@ -334,6 +334,7 @@ async def register_shop(
     api_key = "qsp_" + secrets.token_hex(16)
     now = datetime.now().isoformat()
     # Create with is_active = 0 (Pending Super Admin Approval)
+    hashed_pw = db.hash_password(password.strip())
     cursor.execute("""
     INSERT INTO shops (
         shop_code, name, owner_name, phone, password, api_key, 
@@ -341,7 +342,7 @@ async def register_shop(
         rate_bw_single, rate_bw_double, rate_color_single, rate_color_double, rate_photo_4x6,
         is_active, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 3.0, 5.0, 10.0, 18.0, 30.0, 0, ?)
-    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), password.strip(), api_key, phone.strip(), phone.strip(), now))
+    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), hashed_pw, api_key, phone.strip(), phone.strip(), now))
     conn.commit()
     shop_id = cursor.lastrowid
     conn.close()
@@ -377,9 +378,19 @@ async def login_shop(
 ):
     clean_phone = phone.strip()
     clean_pass = password.strip()
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+
+    # Check brute-force lockout
+    is_locked, remaining_mins = db.is_account_locked(clean_phone)
+    if is_locked:
+        return templates.TemplateResponse(request=request, name="admin_login.html", context={
+            "mode": "login",
+            "error": f"🔒 পরপর ৫ বার ভুল পাসওয়ার্ড দেওয়ার কারণে এই একাউন্টটি সাময়িকভাবে লক করা হয়েছে ({remaining_mins} মিনিট বাকি)। জরুরি প্রয়োজনে সুপার অ্যাডমিনের সাথে যোগাযোগ করে আনলক করিয়ে নিন।"
+        })
 
     # 1. Check if Super Admin credentials were entered
     if db.authenticate_superadmin(clean_phone, clean_pass):
+        db.record_login_success(clean_phone)
         response = RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
         set_superadmin_session(response, request)
         return response
@@ -387,10 +398,20 @@ async def login_shop(
     # 2. Check regular shopkeeper login (distinguish pending vs wrong password)
     any_shop = db.get_shop_by_credentials_any_status(clean_phone, clean_pass)
     if not any_shop:
+        attempts, locked_now, lock_mins = db.record_login_failure(clean_phone, client_ip)
+        if locked_now:
+            error_msg = "🔒 পরপর ৫ বার ভুল পাসওয়ার্ড দেওয়ার কারণে এই একাউন্টটি ১০ মিনিটের জন্য সাময়িকভাবে লক করা হয়েছে। জরুরি প্রয়োজনে সুপার অ্যাডমিনের সাথে যোগাযোগ করে আনলক করিয়ে নিন।"
+        else:
+            remaining = max(0, 5 - attempts)
+            error_msg = f"মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে। (বাকি চেষ্টা: {remaining} বার)"
         return templates.TemplateResponse(request=request, name="admin_login.html", context={
             "mode": "login", 
-            "error": "মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে।"
+            "error": error_msg
         })
+
+    # Successful login clears failed attempts
+    db.record_login_success(clean_phone)
+
     if not any_shop.get("is_active"):
         return templates.TemplateResponse(request=request, name="admin_login.html", context={
             "mode": "login", 
@@ -422,12 +443,14 @@ async def superadmin_dashboard(request: Request, msg: str = "", err: str = "", c
     active_shops = [s for s in shops if s.get("is_active")]
     sa_creds = db.get_superadmin_credentials()
     created_shop = db.get_shop_by_code(created.strip().lower()) if created else None
+    locked_accounts = db.list_locked_accounts()
     return templates.TemplateResponse(request=request, name="superadmin.html", context={
         "authenticated": True,
         "shops": shops,
         "pending_shops": pending_shops,
         "active_shops": active_shops,
         "sa_creds": sa_creds,
+        "locked_accounts": locked_accounts,
         "base_url": base_url(request),
         "msg": msg,
         "error": err,
@@ -435,15 +458,45 @@ async def superadmin_dashboard(request: Request, msg: str = "", err: str = "", c
     })
 
 
+@app.post("/superadmin/unlock")
+async def superadmin_unlock_account(request: Request, identifier: str = Form(...)):
+    if not is_superadmin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    clean_id = identifier.strip()
+    db.unlock_account(clean_id)
+    return RedirectResponse(
+        url=f"/superadmin?msg={clean_id}+একাউন্টটির+লক+সফলভাবে+ছুটিয়ে+দেওয়া+হয়েছে",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
 @app.post("/superadmin/login")
 async def superadmin_login(request: Request, phone: str = Form(...), password: str = Form(...)):
-    if db.authenticate_superadmin(phone.strip(), password.strip()):
+    clean_phone = phone.strip()
+    clean_pass = password.strip()
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+
+    is_locked, remaining_mins = db.is_account_locked(clean_phone)
+    if is_locked:
+        return templates.TemplateResponse(request=request, name="superadmin.html", context={
+            "authenticated": False,
+            "error": f"🔒 পরপর ৫ বার ভুল পাসওয়ার্ড দেওয়ার কারণে সুপার-অ্যাডমিন লগইন সাময়িকভাবে লক করা হয়েছে ({remaining_mins} মিনিট বাকি)।"
+        })
+
+    if db.authenticate_superadmin(clean_phone, clean_pass):
+        db.record_login_success(clean_phone)
         response = RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
         set_superadmin_session(response, request)
         return response
+
+    attempts, locked_now, _ = db.record_login_failure(clean_phone, client_ip)
+    if locked_now:
+        err = "🔒 পরপর ৫ বার ভুল পাসওয়ার্ড দেওয়ার কারণে সুপার-অ্যাডমিন লগইন ১০ মিনিটের জন্য লক করা হয়েছে।"
+    else:
+        err = f"সুপার অ্যাডমিন মোবাইল নম্বর বা পাসওয়ার্ড ভুল হয়েছে। (বাকি চেষ্টা: {max(0, 5 - attempts)} বার)"
     return templates.TemplateResponse(request=request, name="superadmin.html", context={
         "authenticated": False,
-        "error": "সুপার অ্যাডমিন মোবাইল নম্বর বা পাসওয়ার্ড ভুল হয়েছে।"
+        "error": err
     })
 
 
@@ -482,6 +535,7 @@ async def superadmin_create_shop(
 
     api_key = "qsp_" + secrets.token_hex(16)
     now = datetime.now().isoformat()
+    hashed_pw = db.hash_password(password.strip())
     cursor.execute("""
     INSERT INTO shops (
         shop_code, name, owner_name, phone, password, api_key, 
@@ -489,7 +543,7 @@ async def superadmin_create_shop(
         rate_bw_single, rate_bw_double, rate_color_single, rate_color_double, rate_photo_4x6,
         is_active, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 3.0, 5.0, 10.0, 18.0, 30.0, 1, ?)
-    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), password.strip(), api_key, phone.strip(), phone.strip(), now))
+    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), hashed_pw, api_key, phone.strip(), phone.strip(), now))
     conn.commit()
     conn.close()
 
@@ -2303,6 +2357,7 @@ async def admin_view_transfer(transfer_id: str, request: Request):
         if r2_url:
             return RedirectResponse(url=r2_url, status_code=status.HTTP_302_FOUND)
 
+    safe_exts = {"jpg", "jpeg", "png", "webp", "gif", "pdf", "txt", "csv", "log", "json"}
     if ext in {"jpg", "jpeg"}:
         mtype = "image/jpeg"
     elif ext == "png":
@@ -2315,11 +2370,24 @@ async def admin_view_transfer(transfer_id: str, request: Request):
         mtype = "application/pdf"
     elif ext in {"txt", "csv", "log", "json"}:
         mtype = "text/plain; charset=utf-8"
+    else:
+        # Strictly forbid inline rendering of dangerous/unknown files (e.g. HTML, SVG)
+        return FileResponse(
+            t["stored_path"],
+            filename=orig_name,
+            media_type="application/octet-stream",
+            content_disposition_type="attachment"
+        )
 
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox"
+    }
     return FileResponse(
         t["stored_path"],
         media_type=mtype,
-        content_disposition_type="inline"
+        content_disposition_type="inline",
+        headers=headers
     )
 
 
