@@ -1124,7 +1124,7 @@ async def save_office_editable_content(payload: dict = Body(...)):
 
     if doc_kind == "excel" and isinstance(payload.get("sheets"), list):
         sheets = payload["sheets"]
-        html_body = office_docs.sheets_to_html(sheets, title=title)
+        html_body = office_docs.sheets_to_html(sheets, title=title, orientation=orientation)
     else:
         sheets = None
         html_body = str(payload.get("html", "<p>&nbsp;</p>"))

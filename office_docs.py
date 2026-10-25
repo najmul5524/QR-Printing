@@ -176,7 +176,9 @@ def _try_native_office_to_pdf(raw_path: str, ext: str, pdf_out_path: str) -> boo
         elif ext in ("xls", "xlsx"):
             ps_script = (
                 f"$e = New-Object -ComObject Excel.Application; $e.Visible = $false; $e.DisplayAlerts = $false; "
-                f"try {{ $wb = $e.Workbooks.Open('{ps_in}', 0, $true); $wb.ExportAsFixedFormat(0, '{ps_out}'); $wb.Close($false) }} "
+                f"try {{ $wb = $e.Workbooks.Open('{ps_in}', 0, $true); "
+                f"foreach ($s in $wb.Worksheets) {{ $s.PageSetup.PrintGridlines = $true }}; "
+                f"$wb.ExportAsFixedFormat(0, '{ps_out}'); $wb.Close($false) }} "
                 f"finally {{ $e.Quit() }}"
             )
         else:
@@ -367,20 +369,133 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                     return f"<h3{style_attr}>{inner}</h3>"
                 return f"<p{style_attr}>{inner}</p>"
 
+            avail_w_pt = 778.0 if orientation == "landscape" else 531.0
+
             def render_table(tbl_el: ET.Element) -> str:
-                # Extract column widths from w:tblGrid/w:gridCol
-                col_widths: List[int] = []
+                # 1. Parse table properties <w:tblPr> (width, alignment)
+                tblPr = tbl_el.find(f"{W_NS}tblPr")
+                tbl_align = "left"
+                specified_tbl_w_pt: Optional[float] = None
+                if tblPr is not None:
+                    jc = tblPr.find(f"{W_NS}jc")
+                    if jc is not None:
+                        tbl_align = jc.attrib.get(f"{W_NS}val", "left").lower()
+                    tblW = tblPr.find(f"{W_NS}tblW")
+                    if tblW is not None:
+                        w_type = tblW.attrib.get(f"{W_NS}type", "auto").lower()
+                        try:
+                            w_val = float(tblW.attrib.get(f"{W_NS}w", "0") or 0)
+                            if w_type == "dxa" and w_val > 0:
+                                specified_tbl_w_pt = w_val / 20.0
+                            elif w_type == "pct" and w_val > 0:
+                                specified_tbl_w_pt = (w_val / 5000.0) * avail_w_pt
+                        except Exception:
+                            pass
+
+                # 2. Extract column widths from w:tblGrid/w:gridCol
+                raw_col_widths_dxa: List[float] = []
                 tblGrid = tbl_el.find(f"{W_NS}tblGrid")
                 if tblGrid is not None:
                     for gc in tblGrid.findall(f"{W_NS}gridCol"):
                         try:
-                            col_widths.append(max(100, int(gc.attrib.get(f"{W_NS}w", "1000") or 1000)))
+                            raw_col_widths_dxa.append(max(100.0, float(gc.attrib.get(f"{W_NS}w", "1000") or 1000)))
                         except Exception:
-                            col_widths.append(1000)
-                total_grid_w = sum(col_widths) or 1
+                            raw_col_widths_dxa.append(1000.0)
+
+                # Fallback: scan rows to infer column widths from cells
+                if not raw_col_widths_dxa:
+                    inferred: Dict[int, float] = {}
+                    for tr in tbl_el.findall(f"{W_NS}tr"):
+                        c_idx = 0
+                        for tc in tr.findall(f"{W_NS}tc"):
+                            c_span = 1
+                            c_dxa = 1000.0
+                            tcPr = tc.find(f"{W_NS}tcPr")
+                            if tcPr is not None:
+                                tcW = tcPr.find(f"{W_NS}tcW")
+                                if tcW is not None:
+                                    try:
+                                        c_dxa = max(100.0, float(tcW.attrib.get(f"{W_NS}w", "1000") or 1000))
+                                    except Exception:
+                                        pass
+                                gs = tcPr.find(f"{W_NS}gridSpan")
+                                if gs is not None:
+                                    try:
+                                        c_span = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
+                                    except Exception:
+                                        c_span = 1
+                            if c_span == 1:
+                                inferred[c_idx] = max(inferred.get(c_idx, 0.0), c_dxa)
+                            c_idx += c_span
+                    if inferred:
+                        max_k = max(inferred.keys())
+                        raw_col_widths_dxa = [inferred.get(i, 1000.0) for i in range(max_k + 1)]
+
+                col_pts = [w / 20.0 for w in raw_col_widths_dxa]
+                total_grid_pt = sum(col_pts) if col_pts else avail_w_pt
+                target_w_pt = min(specified_tbl_w_pt if (specified_tbl_w_pt and specified_tbl_w_pt > 50) else total_grid_pt, avail_w_pt)
+                if total_grid_pt > 0 and col_pts:
+                    scale = target_w_pt / total_grid_pt
+                    final_col_pts = [max(16.0, round(w * scale, 1)) for w in col_pts]
+                else:
+                    final_col_pts = []
+                actual_tbl_w_pt = sum(final_col_pts) if final_col_pts else target_w_pt
+
+                # 3. Pre-scan vertical merges (w:vMerge) across rows to prevent column shifts
+                rows_el = tbl_el.findall(f"{W_NS}tr")
+                vmerge_info: Dict[Tuple[int, int], Dict[str, Any]] = {}
+                active_vmerges: Dict[int, Tuple[int, int]] = {}
+
+                for r_i, tr in enumerate(rows_el):
+                    col_cursor = 0
+                    for tc in tr.findall(f"{W_NS}tc"):
+                        tcPr = tc.find(f"{W_NS}tcPr")
+                        colspan = 1
+                        is_vmerge_start = False
+                        is_vmerge_cont = False
+                        if tcPr is not None:
+                            gs = tcPr.find(f"{W_NS}gridSpan")
+                            if gs is not None:
+                                try:
+                                    colspan = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
+                                except Exception:
+                                    colspan = 1
+                            vMerge = tcPr.find(f"{W_NS}vMerge")
+                            if vMerge is not None:
+                                val = vMerge.attrib.get(f"{W_NS}val", "").lower()
+                                if val == "restart":
+                                    is_vmerge_start = True
+                                else:
+                                    is_vmerge_cont = True
+
+                        if is_vmerge_start:
+                            active_vmerges[col_cursor] = (r_i, col_cursor)
+                            vmerge_info[(r_i, col_cursor)] = {"action": "render", "rowspan": 1}
+                        elif is_vmerge_cont and col_cursor in active_vmerges:
+                            starter = active_vmerges[col_cursor]
+                            if starter in vmerge_info:
+                                vmerge_info[starter]["rowspan"] += 1
+                            vmerge_info[(r_i, col_cursor)] = {"action": "skip"}
+                        else:
+                            active_vmerges.pop(col_cursor, None)
+                            vmerge_info[(r_i, col_cursor)] = {"action": "render", "rowspan": 1}
+
+                        col_cursor += colspan
 
                 t_rows: List[str] = []
-                for tr in tbl_el.findall(f"{W_NS}tr"):
+                for r_i, tr in enumerate(rows_el):
+                    trPr = tr.find(f"{W_NS}trPr")
+                    row_h_pt: Optional[float] = None
+                    if trPr is not None:
+                        trHeight = trPr.find(f"{W_NS}trHeight")
+                        if trHeight is not None:
+                            try:
+                                h_val = float(trHeight.attrib.get(f"{W_NS}val", "0") or 0)
+                                if h_val > 0:
+                                    row_h_pt = max(10.0, h_val / 20.0)
+                            except Exception:
+                                pass
+
                     cells: List[str] = []
                     col_cursor = 0
                     for tc in tr.findall(f"{W_NS}tc"):
@@ -395,10 +510,6 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                                     colspan = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
                                 except Exception:
                                     colspan = 1
-                            vMerge = tcPr.find(f"{W_NS}vMerge")
-                            if vMerge is not None and vMerge.attrib.get(f"{W_NS}val", "") == "":
-                                # Continuation of vertical merge: render empty cell or skip
-                               pass
                             shd = tcPr.find(f"{W_NS}shd")
                             if shd is not None:
                                 cell_bg = _clean_hex_color(shd.attrib.get(f"{W_NS}fill"))
@@ -408,12 +519,18 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                                 if vv in ("center", "bottom"):
                                     v_align = "middle" if vv == "center" else "bottom"
 
-                        # Compute percentage width of this cell from col_widths
-                        w_pct_str = ""
-                        if col_widths and col_cursor < len(col_widths):
-                            span_w = sum(col_widths[col_cursor : col_cursor + colspan])
-                            pct = max(4.0, min(96.0, (span_w / float(total_grid_w)) * 100.0))
-                            w_pct_str = f"width:{pct:.1f}%;"
+                        vm = vmerge_info.get((r_i, col_cursor), {"action": "render", "rowspan": 1})
+                        if vm.get("action") == "skip":
+                            col_cursor += colspan
+                            continue
+
+                        rowspan = vm.get("rowspan", 1)
+
+                        # Explicit point width for this cell from final_col_pts (never % which Story ignores)
+                        w_pt_style = ""
+                        if final_col_pts and col_cursor < len(final_col_pts):
+                            span_w = sum(final_col_pts[col_cursor : col_cursor + colspan])
+                            w_pt_style = f"width:{span_w:.1f}pt; max-width:{span_w:.1f}pt;"
                         col_cursor += colspan
 
                         cell_blocks: List[str] = []
@@ -430,23 +547,42 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                             "border:1px solid #334155",
                             "padding:4px 6px",
                             f"vertical-align:{v_align}",
+                            "box-sizing:border-box",
                         ]
-                        if w_pct_str:
-                            c_styles.append(w_pct_str)
+                        if w_pt_style:
+                            c_styles.append(w_pt_style)
+                        if row_h_pt:
+                            c_styles.append(f"height:{row_h_pt:.1f}pt")
                         if cell_bg:
                             c_styles.append(f"background-color:{cell_bg}")
-                        span_attr = f' colspan="{colspan}"' if colspan > 1 else ""
-                        cells.append(f'<td{span_attr} style="{"; ".join(c_styles)};">{cell_inner}</td>')
+
+                        attrs = []
+                        if colspan > 1:
+                            attrs.append(f'colspan="{colspan}"')
+                        if rowspan > 1:
+                            attrs.append(f'rowspan="{rowspan}"')
+                        attrs.append(f'style="{"; ".join(c_styles)};"')
+                        cells.append(f'<td {" ".join(attrs)}>{cell_inner}</td>')
+
                     if cells:
-                        t_rows.append("<tr>" + "".join(cells) + "</tr>")
+                        row_style = f' style="height:{row_h_pt:.1f}pt;"' if row_h_pt else ""
+                        t_rows.append(f"<tr{row_style}>" + "".join(cells) + "</tr>")
 
                 if not t_rows:
                     return ""
-                return (
-                    '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:100%; margin:6px 0; font-size:10pt;">'
-                    + "".join(t_rows)
-                    + "</table>"
-                )
+
+                colgroup_html = ""
+                if final_col_pts:
+                    colgroup_html = "<colgroup>" + "".join(f'<col style="width:{w:.1f}pt;">' for w in final_col_pts) + "</colgroup>"
+
+                margin_css = "margin:6px 0;"
+                if tbl_align == "center":
+                    margin_css = "margin:6px auto;"
+                elif tbl_align == "right":
+                    margin_css = "margin:6px 0 6px auto;"
+
+                table_css = f"border-collapse:collapse; width:{actual_tbl_w_pt:.1f}pt; max-width:100%; {margin_css} font-size:10pt;"
+                return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{colgroup_html}{"".join(t_rows)}</table>'
 
             for elem in body:
                 if elem.tag == f"{W_NS}p":
@@ -628,22 +764,60 @@ def _render_pptx_to_pdf_and_html(raw_path: str, pdf_out_path: str) -> Tuple[str,
                     elif child.tag == f"{P_NS}graphicFrame":
                         rect = get_xfrm_rect(child) or _fitz.Rect(36, 80, sld_w_pt - 36, sld_h_pt - 40)
                         for a_tbl in child.iter(f"{A_NS}tbl"):
+                            # Extract column widths in EMU (1 pt = 12700 EMU)
+                            raw_col_pts: List[float] = []
+                            a_grid = a_tbl.find(f"{A_NS}tblGrid")
+                            if a_grid is not None:
+                                for gc in a_grid.findall(f"{A_NS}gridCol"):
+                                    try:
+                                        raw_col_pts.append(max(15.0, float(gc.attrib.get("w", "1270000")) / 12700.0))
+                                    except Exception:
+                                        raw_col_pts.append(60.0)
+
+                            frame_w = float(rect.width) if rect else 500.0
+                            tot_c_w = sum(raw_col_pts) if raw_col_pts else frame_w
+                            if tot_c_w > 0 and raw_col_pts:
+                                scale = frame_w / tot_c_w
+                                final_ppt_cols = [round(w * scale, 1) for w in raw_col_pts]
+                            else:
+                                final_ppt_cols = raw_col_pts
+
                             t_rows: List[str] = []
                             for a_tr in a_tbl.findall(f"{A_NS}tr"):
+                                tr_h_pt = None
+                                try:
+                                    h_emu = float(a_tr.attrib.get("h", "0") or 0)
+                                    if h_emu > 0:
+                                        tr_h_pt = max(10.0, h_emu / 12700.0)
+                                except Exception:
+                                    pass
+
                                 cells: List[str] = []
-                                for a_tc in a_tr.findall(f"{A_NS}tc"):
+                                for c_idx, a_tc in enumerate(a_tr.findall(f"{A_NS}tc")):
                                     cell_txts = [
                                         _html.escape(t.text)
                                         for t in a_tc.iter(f"{A_NS}t")
                                         if t.text
                                     ]
                                     c_inner = " ".join(cell_txts) or "&nbsp;"
-                                    cells.append(f'<td style="border:1px solid #334155; padding:4px 6px;">{c_inner}</td>')
+                                    w_st = f"width:{final_ppt_cols[c_idx]:.1f}pt;" if c_idx < len(final_ppt_cols) else ""
+                                    h_st = f"height:{tr_h_pt:.1f}pt;" if tr_h_pt else ""
+                                    st_list = ["border:1px solid #334155", "padding:4px 6px", "box-sizing:border-box"]
+                                    if w_st:
+                                        st_list.append(w_st)
+                                    if h_st:
+                                        st_list.append(h_st)
+                                    cells.append(f'<td style="{"; ".join(st_list)}">{c_inner}</td>')
                                 if cells:
-                                    t_rows.append("<tr>" + "".join(cells) + "</tr>")
+                                    row_st = f' style="height:{tr_h_pt:.1f}pt;"' if tr_h_pt else ""
+                                    t_rows.append(f"<tr{row_st}>" + "".join(cells) + "</tr>")
                             if t_rows:
+                                colgroup_str = ""
+                                if final_ppt_cols:
+                                    colgroup_str = "<colgroup>" + "".join(f'<col style="width:{w:.1f}pt;">' for w in final_ppt_cols) + "</colgroup>"
                                 tbl_h = (
-                                    '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:100%; font-size:11pt;">'
+                                    f'<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:{frame_w:.1f}pt; font-size:11pt;">'
+                                    + colgroup_str
                                     + "".join(t_rows)
                                     + "</table>"
                                 )
@@ -813,7 +987,45 @@ def _parse_excel_to_sheets(path: str, ext: str) -> List[Dict[str, Any]]:
                     raw_rows.pop()
                 if max_non_empty_col > 0 and raw_rows:
                     trimmed = [r[:max_non_empty_col] for r in raw_rows]
-                    sheets_out.append({"name": name, "rows": trimmed})
+
+                    # Extract column widths
+                    col_widths_pt: List[float] = []
+                    for col_i in range(1, max_non_empty_col + 1):
+                        col_letter = openpyxl.utils.get_column_letter(col_i)
+                        dim = ws.column_dimensions.get(col_letter)
+                        w = dim.width if (dim and dim.width) else None
+                        if w:
+                            col_widths_pt.append(max(25.0, float(w) * 5.6 + 10.0))
+                        else:
+                            # Infer from column text content length
+                            max_len = max((len(r[col_i - 1]) for r in trimmed if col_i - 1 < len(r)), default=5)
+                            col_widths_pt.append(max(35.0, min(240.0, max_len * 6.5 + 18.0)))
+
+                    # Extract row heights
+                    row_heights_pt: List[Optional[float]] = []
+                    for r_i in range(1, len(trimmed) + 1):
+                        r_dim = ws.row_dimensions.get(r_i)
+                        h = r_dim.height if (r_dim and r_dim.height) else None
+                        row_heights_pt.append(float(h) if h and float(h) > 0 else None)
+
+                    # Extract merged cell ranges
+                    merged_ranges = []
+                    for m in ws.merged_cells.ranges:
+                        if m.min_row <= len(trimmed) and m.min_col <= max_non_empty_col:
+                            merged_ranges.append({
+                                "min_r": m.min_row - 1,
+                                "max_r": min(len(trimmed) - 1, m.max_row - 1),
+                                "min_c": m.min_col - 1,
+                                "max_c": min(max_non_empty_col - 1, m.max_col - 1),
+                            })
+
+                    sheets_out.append({
+                        "name": name,
+                        "rows": trimmed,
+                        "col_widths": col_widths_pt,
+                        "row_heights": row_heights_pt,
+                        "merged_ranges": merged_ranges
+                    })
             if sheets_out:
                 return sheets_out
         except Exception:
@@ -851,8 +1063,9 @@ def _parse_excel_to_sheets(path: str, ext: str) -> List[Dict[str, Any]]:
     return [{"name": "Sheet 1", "rows": [["ক্রমিক", "বিবরণ", "পরিমাণ", "মূল্য"], ["১", "", "", ""]]}]
 
 
-def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "") -> str:
-    """Converts spreadsheet rows into a clean, print-ready HTML table with full borders."""
+def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "", orientation: str = "portrait") -> str:
+    """Converts spreadsheet rows into clean, exact-dimension HTML tables with proportional column widths and row heights."""
+    avail_w = 778.0 if orientation == "landscape" else 531.0
     blocks: List[str] = []
     for s_idx, sheet in enumerate(sheets):
         s_name = _html.escape(str(sheet.get("name") or f"Sheet {s_idx + 1}"))
@@ -861,19 +1074,86 @@ def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "") -> str:
             continue
         if len(sheets) > 1:
             blocks.append(f'<h3 style="margin:10px 0 4px 0; color:#1e293b; font-size:11pt;">📊 {s_name}</h3>')
+
+        num_cols = max((len(r) for r in rows), default=1)
+        raw_cols = list(sheet.get("col_widths") or [])
+        if len(raw_cols) < num_cols:
+            for c_i in range(len(raw_cols), num_cols):
+                max_len = max((len(str(r[c_i])) for r in rows if c_i < len(r)), default=5)
+                raw_cols.append(max(35.0, min(250.0, max_len * 6.5 + 18.0)))
+        raw_cols = raw_cols[:num_cols]
+
+        total_w = sum(raw_cols) if raw_cols else avail_w
+        if total_w > avail_w:
+            scale = avail_w / total_w
+            final_cols = [max(20.0, round(w * scale, 1)) for w in raw_cols]
+        else:
+            final_cols = [round(w, 1) for w in raw_cols]
+        tbl_w = sum(final_cols)
+
+        row_heights = list(sheet.get("row_heights") or [])
+
+        # Process merged cells
+        merged_lookup: Dict[Tuple[int, int], Dict[str, Any]] = {}
+        for m in sheet.get("merged_ranges") or []:
+            min_r, max_r = m["min_r"], m["max_r"]
+            min_c, max_c = m["min_c"], m["max_c"]
+            for r in range(min_r, max_r + 1):
+                for c in range(min_c, max_c + 1):
+                    if r == min_r and c == min_c:
+                        merged_lookup[(r, c)] = {
+                            "action": "render",
+                            "rowspan": max_r - min_r + 1,
+                            "colspan": max_c - min_c + 1
+                        }
+                    else:
+                        merged_lookup[(r, c)] = {"action": "skip"}
+
         t_rows: List[str] = []
         for r_i, row in enumerate(rows):
             cells: List[str] = []
             is_header = (r_i == 0 and len(rows) > 1)
             bg_style = "background-color:#f1f5f9; font-weight:bold;" if is_header else ""
-            for cell in row:
+            r_h = row_heights[r_i] if r_i < len(row_heights) else None
+            h_style = f"height:{r_h:.1f}pt;" if r_h and r_h > 0 else ""
+
+            for c_i, cell in enumerate(row):
+                m_info = merged_lookup.get((r_i, c_i), {"action": "render", "rowspan": 1, "colspan": 1})
+                if m_info["action"] == "skip":
+                    continue
+
+                rspan = m_info.get("rowspan", 1)
+                cspan = m_info.get("colspan", 1)
+
                 val = _html.escape(str(cell if cell is not None else "")) or "&nbsp;"
-                cells.append(
-                    f'<td style="border:1px solid #334155; padding:4px 6px; {bg_style}">{val}</td>'
-                )
-            t_rows.append("<tr>" + "".join(cells) + "</tr>")
+                w_pt = sum(final_cols[c_i : c_i + cspan]) if c_i < len(final_cols) else 50.0
+                cell_styles = [
+                    "border:1px solid #334155",
+                    "padding:4px 6px",
+                    "vertical-align:middle",
+                    f"width:{w_pt:.1f}pt",
+                    "box-sizing:border-box"
+                ]
+                if bg_style:
+                    cell_styles.append(bg_style)
+                if h_style:
+                    cell_styles.append(h_style)
+
+                attrs = [f'style="{"; ".join(cell_styles)}"']
+                if rspan > 1:
+                    attrs.append(f'rowspan="{rspan}"')
+                if cspan > 1:
+                    attrs.append(f'colspan="{cspan}"')
+
+                cells.append(f'<td {" ".join(attrs)}>{val}</td>')
+
+            tr_style_attr = f' style="{h_style}"' if h_style else ""
+            t_rows.append(f"<tr{tr_style_attr}>" + "".join(cells) + "</tr>")
+
+        colgroup = "<colgroup>" + "".join(f'<col style="width:{w:.1f}pt;">' for w in final_cols) + "</colgroup>"
         blocks.append(
-            '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:100%; font-size:9.5pt; margin-bottom:12px;">'
+            f'<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:{tbl_w:.1f}pt; max-width:100%; font-size:9.5pt; margin-bottom:12px;">'
+            + colgroup
             + "".join(t_rows)
             + "</table>"
         )
@@ -977,9 +1257,9 @@ def convert_office_file_to_pdf_and_state(
     if ext in EXCEL_EXTENSIONS:
         doc_kind = "excel"
         sheets = _parse_excel_to_sheets(raw_path, ext)
-        html_body = sheets_to_html(sheets, title=orig_filename)
         max_cols = max((len(r) for s in sheets for r in s.get("rows", [])), default=4)
         orientation = "landscape" if max_cols >= 8 else "portrait"
+        html_body = sheets_to_html(sheets, title=orig_filename, orientation=orientation)
         if not native_ok:
             pages = render_html_to_pdf(html_body, pdf_out_path, orientation=orientation)
         else:
