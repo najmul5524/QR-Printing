@@ -3,6 +3,10 @@ import re
 import io
 import uuid
 import json
+import shutil
+import logging
+
+logger = logging.getLogger(__name__)
 import hmac
 import hashlib
 import asyncio
@@ -2287,6 +2291,10 @@ async def admin_view_transfer(transfer_id: str, request: Request):
                 media_type="application/pdf",
                 content_disposition_type="inline"
             )
+        raise HTTPException(
+            status_code=400,
+            detail="এই Office ফাইলটির প্রিভিউ তৈরি করা সম্ভব হয়নি। ফাইলটি দেখতে ডাউনলোড করে নিন।"
+        )
 
     if storage.is_r2_configured():
         r2_url = await asyncio.to_thread(
