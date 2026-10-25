@@ -817,13 +817,20 @@
         </div>
 
         <!-- VIEW 2: Straightened / Cropped Live Result Inside Modal (Before clicking OK) -->
-        <div id="cropLiveResultView" class="hidden p-3.5 space-y-3">
-          <div class="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl px-3 py-2 text-xs font-bold flex items-center justify-between">
-            <span>✨ ছবিটি সোজা ও ক্রপ করা হয়েছে (লাইভ প্রিভিউ)</span>
-            <span class="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">প্রস্তুত</span>
+        <div id="cropLiveResultView" class="hidden p-3.5 space-y-2.5">
+          <div class="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl px-3 py-1.5 text-xs font-bold flex items-center justify-between">
+            <span>✨ ছবিটি সোজা ও ক্রপ করা হয়েছে (তাৎক্ষণিক প্রিভিউ)</span>
+            <span id="cropPreviewFilterBadge" class="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">আসল ক্রপ</span>
           </div>
-          <div class="relative bg-gray-950 rounded-xl overflow-hidden flex items-center justify-center h-[360px] max-h-[50vh] p-2 border border-gray-800">
+          <div class="relative bg-gray-950 rounded-xl overflow-hidden flex items-center justify-center h-[330px] max-h-[46vh] p-2 border border-gray-800">
             <img id="cropResultPreviewImg" src="" alt="Straightened Live Result" class="max-h-full max-w-full object-contain rounded shadow-lg bg-white">
+          </div>
+          <!-- Instant Clarity Filter right inside Crop Preview -->
+          <div class="grid grid-cols-4 gap-1.5 text-center text-[11px]">
+            <button type="button" id="cropFx_none" onclick="setCropEnhanceFilter('none')" class="py-1.5 px-1.5 rounded-lg font-bold border-2 border-emerald-600 bg-emerald-50 text-emerald-900">🖼️ আসল ক্রপ</button>
+            <button type="button" id="cropFx_magic_color" onclick="setCropEnhanceFilter('magic_color')" class="py-1.5 px-1.5 rounded-lg font-bold border border-gray-200 bg-gray-50 text-gray-700 hover:border-emerald-500">✨ ম্যাজিক ক্লিয়ার</button>
+            <button type="button" id="cropFx_hd_clear" onclick="setCropEnhanceFilter('hd_clear')" class="py-1.5 px-1.5 rounded-lg font-bold border border-gray-200 bg-gray-50 text-gray-700 hover:border-emerald-500">💎 HD ক্লিয়ার</button>
+            <button type="button" id="cropFx_bw_doc" onclick="setCropEnhanceFilter('bw_doc')" class="py-1.5 px-1.5 rounded-lg font-bold border border-gray-200 bg-gray-50 text-gray-700 hover:border-emerald-500">🖨️ সাদাকালো</button>
           </div>
           <p class="text-[11px] text-gray-600 text-center font-medium">
             ছবিটি ঠিক থাকলে নিচে <b>"✓ ওকে (প্রিন্ট পেইজে যান)"</b> চাপুন, অথবা পুনরায় কোণা পরিবর্তন করতে <b>"↩️ আবার কোণা ঠিক করুন"</b> চাপুন।
@@ -910,19 +917,32 @@
             নিচের যেকোনো মোডে ক্লিক করে প্রিভিউ দেখুন এবং পছন্দ হলে <b>"স্ক্যান সেভ করুন"</b> বাটনে চাপুন:
           </p>
 
-          <div class="grid grid-cols-4 gap-1.5 text-center text-xs">
-            <button type="button" id="camBtn_original" onclick="selectCamscanMode('original')" class="cam-mode-btn p-2 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
-              <span class="text-base block mb-0.5">🖼️</span> আসল ছবি
+          <div class="grid grid-cols-5 gap-1.5 text-center text-[11px]">
+            <button type="button" id="camBtn_original" onclick="selectCamscanMode('original')" class="cam-mode-btn p-1.5 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
+              <span class="text-sm block mb-0.5">🖼️</span> আসল ছবি
             </button>
-            <button type="button" id="camBtn_magic_color" onclick="selectCamscanMode('magic_color')" class="cam-mode-btn p-2 border-2 border-emerald-600 bg-emerald-50 text-emerald-900 rounded-xl font-bold">
-              <span class="text-base block mb-0.5">✨</span> ম্যাজিক কালার
+            <button type="button" id="camBtn_magic_color" onclick="selectCamscanMode('magic_color')" class="cam-mode-btn p-1.5 border-2 border-emerald-600 bg-emerald-50 text-emerald-900 rounded-xl font-bold">
+              <span class="text-sm block mb-0.5">✨</span> ম্যাজিক কালার
             </button>
-            <button type="button" id="camBtn_bw_doc" onclick="selectCamscanMode('bw_doc')" class="cam-mode-btn p-2 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
-              <span class="text-base block mb-0.5">🖨️</span> ফটোকপি B&W
+            <button type="button" id="camBtn_hd_clear" onclick="selectCamscanMode('hd_clear')" class="cam-mode-btn p-1.5 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
+              <span class="text-sm block mb-0.5">💎</span> HD ক্লিয়ার
             </button>
-            <button type="button" id="camBtn_grayscale" onclick="selectCamscanMode('grayscale')" class="cam-mode-btn p-2 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
-              <span class="text-base block mb-0.5">◐</span> গ্রে-স্কেল
+            <button type="button" id="camBtn_bw_doc" onclick="selectCamscanMode('bw_doc')" class="cam-mode-btn p-1.5 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
+              <span class="text-sm block mb-0.5">🖨️</span> ফটোকপি B&W
             </button>
+            <button type="button" id="camBtn_grayscale" onclick="selectCamscanMode('grayscale')" class="cam-mode-btn p-1.5 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700">
+              <span class="text-sm block mb-0.5">◐</span> গ্রে-স্কেল
+            </button>
+          </div>
+
+          <!-- Ink Contrast / Darkness Strength Control -->
+          <div id="camscanStrengthBar" class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-[11px]">
+            <span class="font-bold text-gray-600">🖋️ লেখার গাঢ়তা:</span>
+            <div class="grid grid-cols-3 gap-1.5 flex-1 max-w-[260px]">
+              <button type="button" id="camStr_light" onclick="setCamscanStrength('light')" class="py-1 px-2 rounded-lg font-bold border border-gray-200 bg-white text-gray-600 hover:border-emerald-400">🔆 হালকা</button>
+              <button type="button" id="camStr_normal" onclick="setCamscanStrength('normal')" class="py-1 px-2 rounded-lg font-bold border-2 border-emerald-600 bg-emerald-50 text-emerald-900">⚖️ স্বাভাবিক</button>
+              <button type="button" id="camStr_strong" onclick="setCamscanStrength('strong')" class="py-1 px-2 rounded-lg font-bold border border-gray-200 bg-white text-gray-600 hover:border-emerald-400">🔥 গাঢ় লেখা</button>
+            </div>
           </div>
         </div>
         <div class="p-3 bg-gray-50 border-t flex justify-end gap-2">
@@ -950,6 +970,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102406"></script>
+  <script src="/static/customer_print.js?v=2026102407"></script>
 </body>
 </html>

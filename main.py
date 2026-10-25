@@ -1236,10 +1236,11 @@ async def crop_image_endpoint(payload: dict = Body(...)):
 
 
 @app.get("/api/image/camscan-preview")
-def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
+def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: str = "normal"):
     """Renders a live preview of the CamScanner effect without overwriting the saved file yet."""
     file_id = os.path.basename(str(file_id or ""))
-    mode = clean_choice(mode, ("original", "magic_color", "bw_doc", "grayscale"), "magic_color")
+    mode = clean_choice(mode, ("original", "magic_color", "bw_doc", "hd_clear", "grayscale"), "magic_color")
+    strength = clean_choice(strength, ("light", "normal", "strong"), "normal")
     import image_fx
 
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
@@ -1250,11 +1251,11 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
         with Image.open(orig_f) as im_f, Image.open(orig_b) as im_b:
             im_f = ImageOps.exif_transpose(im_f).convert("RGB")
             im_b = ImageOps.exif_transpose(im_b).convert("RGB")
-            im_f.thumbnail((800, 800), Image.Resampling.LANCZOS)
-            im_b.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            im_f.thumbnail((840, 840), Image.Resampling.LANCZOS)
+            im_b.thumbnail((840, 840), Image.Resampling.LANCZOS)
             if mode != "original":
-                im_f = image_fx.camscanner_process(im_f, mode=mode)
-                im_b = image_fx.camscanner_process(im_b, mode=mode)
+                im_f = image_fx.camscanner_process(im_f, mode=mode, strength=strength)
+                im_b = image_fx.camscanner_process(im_b, mode=mode, strength=strength)
             pad = 16
             cw = max(im_f.width, im_b.width) + pad * 2
             ch = im_f.height + im_b.height + pad * 3
@@ -1262,8 +1263,8 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
             canvas.paste(im_f, ((cw - im_f.width) // 2, pad))
             canvas.paste(im_b, ((cw - im_b.width) // 2, im_f.height + pad * 2))
             buf = io.BytesIO()
-            canvas.save(buf, "JPEG", quality=85)
-            return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+            canvas.save(buf, "JPEG", quality=86)
+            return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
 
     src = resolve_upload(file_id)
     if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
@@ -1271,11 +1272,11 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color"):
     orig = _ensure_orig_backup(src)
     with Image.open(orig) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        im.thumbnail((720, 720), Image.Resampling.BILINEAR)
+        im.thumbnail((840, 840), Image.Resampling.BILINEAR)
         if mode != "original":
-            im = image_fx.camscanner_process(im, mode=mode)
+            im = image_fx.camscanner_process(im, mode=mode, strength=strength)
         buf = io.BytesIO()
-        im.save(buf, "JPEG", quality=80)
+        im.save(buf, "JPEG", quality=84)
         return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
 
 
@@ -1285,7 +1286,8 @@ async def camscan_image_endpoint(payload: dict = Body(...)):
     import shutil
     import image_fx
     file_id = os.path.basename(str(payload.get("file_id", "")))
-    mode = clean_choice(str(payload.get("mode", "magic_color")).strip(), ("original", "magic_color", "bw_doc", "grayscale"), "magic_color")
+    mode = clean_choice(str(payload.get("mode", "magic_color")).strip(), ("original", "magic_color", "bw_doc", "hd_clear", "grayscale"), "magic_color")
+    strength = clean_choice(str(payload.get("strength", "normal")).strip(), ("light", "normal", "strong"), "normal")
 
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
@@ -1297,9 +1299,9 @@ async def camscan_image_endpoint(payload: dict = Body(...)):
             else:
                 with Image.open(orig) as im:
                     im = ImageOps.exif_transpose(im).convert("RGB")
-                    enhanced = image_fx.camscanner_process(im, mode=mode)
+                    enhanced = image_fx.camscanner_process(im, mode=mode, strength=strength)
                     enhanced.save(p, "JPEG", quality=95)
-        return {"success": True, "file_id": file_id, "mode": mode}
+        return {"success": True, "file_id": file_id, "mode": mode, "strength": strength}
 
     src = resolve_upload(file_id)
     if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
@@ -1311,10 +1313,10 @@ async def camscan_image_endpoint(payload: dict = Body(...)):
     else:
         with Image.open(orig) as im:
             im = ImageOps.exif_transpose(im).convert("RGB")
-            enhanced = image_fx.camscanner_process(im, mode=mode)
+            enhanced = image_fx.camscanner_process(im, mode=mode, strength=strength)
             enhanced.save(src, "JPEG", quality=95)
 
-    return {"success": True, "file_id": file_id, "mode": mode}
+    return {"success": True, "file_id": file_id, "mode": mode, "strength": strength}
 
 
 @app.post("/api/file/rotate")
@@ -1472,10 +1474,13 @@ async def perspective_crop_endpoint(payload: dict = Body(...)):
         "a4": 210.0 / 297.0
     }
     target_ratio = ratio_map.get(ratio_key, None)
+    enhance_mode = clean_choice(str(payload.get("enhance_mode", "none")).strip(), ("none", "magic_color", "bw_doc", "hd_clear", "grayscale"), "none")
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio)
+        if enhance_mode != "none":
+            warped = image_fx.camscanner_process(warped, mode=enhance_mode)
         warped.save(src, "JPEG", quality=95)
     _update_orig_backup(src)
 
@@ -1536,12 +1541,15 @@ def perspective_crop_preview_endpoint(payload: dict = Body(...)):
         "a4": 210.0 / 297.0
     }
     target_ratio = ratio_map.get(ratio_key, None)
+    enhance_mode = clean_choice(str(payload.get("enhance_mode", "none")).strip(), ("none", "magic_color", "bw_doc", "hd_clear", "grayscale"), "none")
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio, max_out_dim=1000)
+        if enhance_mode != "none":
+            warped = image_fx.camscanner_process(warped, mode=enhance_mode)
         buf = io.BytesIO()
-        warped.save(buf, "JPEG", quality=82)
+        warped.save(buf, "JPEG", quality=84)
         return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 

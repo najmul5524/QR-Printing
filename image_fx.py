@@ -15,46 +15,95 @@ from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageDraw
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SUITS_DIR = os.path.join(STATIC_DIR, "suits")
 
-def camscanner_process(img: Image.Image, mode: str = "magic_color", contrast: float = 1.3, brightness: float = 1.1) -> Image.Image:
+def camscanner_process(
+    img: Image.Image,
+    mode: str = "magic_color",
+    contrast: float = 1.3,
+    brightness: float = 1.08,
+    strength: str = "normal"
+) -> Image.Image:
     """
-    CamScanner document enhancement algorithm:
-    - Eliminates shadow and uneven yellow/dark background
-    - Sharpens text and document borders for high-clarity printing
+    Pro CamScanner document & ID card enhancement algorithm:
+    - Eliminates shadow and uneven yellow/dark background (pure #FFFFFF white paper clipping)
+    - Deepens faint ink/text while preserving color saturation and sharp edges
+    - Supports strength: 'light' | 'normal' | 'strong'
+    - Supports mode: 'magic_color' | 'bw_doc' | 'hd_clear' | 'grayscale' | 'original'
     """
     img = img.convert("RGB")
     w, h = img.size
 
-    if mode in ("magic_color", "bw_doc"):
-        # Fast illumination estimation: downscale 4x before GaussianBlur, then upscale back (10x faster)
-        gray = ImageOps.grayscale(img)
-        gray_arr = np.array(gray, dtype=np.float32)
-        small_w, small_h = max(32, w // 4), max(32, h // 4)
-        gray_small = gray.resize((small_w, small_h), Image.Resampling.BILINEAR)
-        small_radius = max(4, min(small_w, small_h) // 22)
-        bg_small = gray_small.filter(ImageFilter.GaussianBlur(radius=small_radius))
-        bg = np.array(bg_small.resize((w, h), Image.Resampling.BILINEAR), dtype=np.float32)
+    if mode == "original":
+        return img
 
-        if mode == "magic_color":
-            flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255)
-            arr = np.array(img, dtype=np.float32)
-            norm_factor = (flattened / (gray_arr + 1.0))[:, :, np.newaxis]
-            enhanced = np.clip(arr * norm_factor, 0, 255).astype(np.uint8)
-            res = Image.fromarray(enhanced, mode="RGB")
-            res = ImageEnhance.Sharpness(res).enhance(1.6)
-            res = ImageEnhance.Contrast(res).enhance(contrast)
-            res = ImageEnhance.Brightness(res).enhance(brightness)
-            return res
+    # Fast illumination estimation: downscale 4x before GaussianBlur, then upscale back
+    gray = ImageOps.grayscale(img)
+    gray_arr = np.array(gray, dtype=np.float32)
+    small_w, small_h = max(32, w // 4), max(32, h // 4)
+    gray_small = gray.resize((small_w, small_h), Image.Resampling.BILINEAR)
+    small_radius = max(5, min(small_w, small_h) // 18)
+    bg_small = gray_small.filter(ImageFilter.GaussianBlur(radius=small_radius))
+    bg = np.array(bg_small.resize((w, h), Image.Resampling.BILINEAR), dtype=np.float32)
+
+    if mode == "magic_color":
+        # Normalize uneven lighting
+        flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0.0, 255.0)
+        # White-point & black-point stretch (clips shadow haze to pure 255 white & deepens ink)
+        if strength == "strong":
+            black_pt, white_pt = 68.0, 218.0
+        elif strength == "light":
+            black_pt, white_pt = 28.0, 238.0
         else:
-            flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0, 255).astype(np.uint8)
-            res = Image.fromarray(flattened, mode="L")
-            res = ImageOps.autocontrast(res, cutoff=(4, 4))
-            res = ImageEnhance.Sharpness(res).enhance(2.0)
-            return res.convert("RGB")
+            black_pt, white_pt = 48.0, 228.0
+
+        stretched = np.clip((flattened - black_pt) * (255.0 / max(10.0, white_pt - black_pt)), 0.0, 255.0)
+        arr = np.array(img, dtype=np.float32)
+        norm_factor = (stretched / (gray_arr + 1.0))[:, :, np.newaxis]
+        enhanced = np.clip(arr * norm_factor, 0.0, 255.0)
+
+        # Ensure paper background areas (where stretched >= 250) become clean pure white
+        paper_alpha = np.clip((stretched - 235.0) / 20.0, 0.0, 1.0)[:, :, np.newaxis]
+        enhanced = enhanced * (1.0 - paper_alpha) + 255.0 * paper_alpha
+
+        res = Image.fromarray(enhanced.astype(np.uint8), mode="RGB")
+        res = ImageEnhance.Color(res).enhance(1.22 if strength != "light" else 1.12)
+        res = res.filter(ImageFilter.UnsharpMask(radius=1.4, percent=155, threshold=3))
+        return res
+
+    elif mode == "bw_doc":
+        # Adaptive local ratio thresholding with anti-aliased transition (pure white paper + crisp black text)
+        ratio = gray_arr / (bg + 1.0)
+        if strength == "strong":
+            low_t, high_t = 0.78, 0.92
+        elif strength == "light":
+            low_t, high_t = 0.66, 0.85
+        else:
+            low_t, high_t = 0.72, 0.89
+
+        bw_float = np.clip((ratio - low_t) / max(0.05, high_t - low_t) * 255.0, 0.0, 255.0).astype(np.uint8)
+        res = Image.fromarray(bw_float, mode="L")
+        res = res.filter(ImageFilter.UnsharpMask(radius=1.2, percent=170, threshold=4))
+        return res.convert("RGB")
+
+    elif mode == "hd_clear":
+        # Gentle illumination balance + high sharpness (ideal for ID cards with photos & colorful certificates)
+        flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0.0, 255.0)
+        blend_lum = 0.55 * gray_arr + 0.45 * np.clip((flattened - 20.0) * (255.0 / 225.0), 0.0, 255.0)
+        arr = np.array(img, dtype=np.float32)
+        norm_factor = (blend_lum / (gray_arr + 1.0))[:, :, np.newaxis]
+        enhanced = np.clip(arr * norm_factor, 0.0, 255.0).astype(np.uint8)
+        res = Image.fromarray(enhanced, mode="RGB")
+        res = ImageOps.autocontrast(res, cutoff=(1, 1))
+        res = ImageEnhance.Color(res).enhance(1.15)
+        res = res.filter(ImageFilter.UnsharpMask(radius=1.3, percent=145, threshold=2))
+        return res
 
     elif mode == "grayscale":
-        gray = ImageOps.grayscale(img)
-        res = ImageOps.autocontrast(gray, cutoff=(2, 2))
-        return ImageEnhance.Sharpness(res).enhance(1.4).convert("RGB")
+        flattened = np.clip((gray_arr / (bg + 1.0)) * 255.0, 0.0, 255.0)
+        blend = (0.4 * gray_arr + 0.6 * flattened).astype(np.uint8)
+        res = Image.fromarray(blend, mode="L")
+        res = ImageOps.autocontrast(res, cutoff=(2, 2))
+        res = res.filter(ImageFilter.UnsharpMask(radius=1.3, percent=140, threshold=3))
+        return res.convert("RGB")
 
     return img
 
@@ -263,24 +312,27 @@ def perspective_crop_4points(
 
 def detect_document_corners(img: Image.Image) -> List[Dict[str, float]]:
     """
-    Automatically estimates the 4 corners of a document or card against its background.
+    Automatically estimates the 4 corners of a document or ID card against its background.
+    Combines border color segmentation + edge gradient + morphological denoising + percentile corner projection.
     Returns 4 normalized points [{"x": .., "y": ..}, ...] in [TL, TR, BR, BL] order.
     """
     default_pts = [
-        {"x": 0.07, "y": 0.07},
-        {"x": 0.93, "y": 0.07},
-        {"x": 0.93, "y": 0.93},
-        {"x": 0.07, "y": 0.93}
+        {"x": 0.06, "y": 0.06},
+        {"x": 0.94, "y": 0.06},
+        {"x": 0.94, "y": 0.94},
+        {"x": 0.06, "y": 0.94}
     ]
     try:
         small = img.copy().convert("RGB")
-        small.thumbnail((320, 320), Image.Resampling.BILINEAR)
-        arr = np.asarray(small, dtype=np.float32)
+        small.thumbnail((340, 340), Image.Resampling.BILINEAR)
+        # Slight blur to suppress table grain/dust
+        small_smooth = small.filter(ImageFilter.MedianFilter(size=3))
+        arr = np.asarray(small_smooth, dtype=np.float32)
         sh, sw, _ = arr.shape
         if sh < 30 or sw < 30:
             return default_pts
 
-        t = max(2, int(0.04 * min(sh, sw)))
+        t = max(2, int(0.045 * min(sh, sw)))
         border = np.concatenate([
             arr[:t, :, :].reshape(-1, 3),
             arr[-t:, :, :].reshape(-1, 3),
@@ -288,36 +340,64 @@ def detect_document_corners(img: Image.Image) -> List[Dict[str, float]]:
             arr[:, -t:, :].reshape(-1, 3)
         ])
         bg_med = np.median(border, axis=0)
-        bg_std = np.std(border, axis=0) + 12.0
+        bg_std = np.std(border, axis=0) + 10.0
 
         dist = np.sqrt(np.sum(((arr - bg_med) / bg_std) ** 2, axis=2))
-        mask = dist > 1.85
 
-        fg_ratio = float(np.mean(mask))
-        if fg_ratio < 0.08 or fg_ratio > 0.94:
+        # Also compute edge gradients so light cards on light tables are detected accurately
+        gray = np.mean(arr, axis=2)
+        gx = np.abs(np.gradient(gray, axis=1))
+        gy = np.abs(np.gradient(gray, axis=0))
+        grad = np.hypot(gx, gy)
+        grad_thresh = np.percentile(grad, 86)
+
+        mask = (dist > 1.75) | (grad > max(12.0, grad_thresh))
+        # Ignore 2px outer frame where camera vignette occurs
+        mask[:2, :] = False
+        mask[-2:, :] = False
+        mask[:, :2] = False
+        mask[:, -2:] = False
+
+        # Fast 3x3 neighborhood density filter (removes isolated stray noise pixels)
+        m_float = mask.astype(np.float32)
+        neigh = (
+            m_float[:-2, :-2] + m_float[:-2, 1:-1] + m_float[:-2, 2:] +
+            m_float[1:-1, :-2] + m_float[1:-1, 1:-1] + m_float[1:-1, 2:] +
+            m_float[2:, :-2] + m_float[2:, 1:-1] + m_float[2:, 2:]
+        )
+        clean_mask = np.zeros_like(mask)
+        clean_mask[1:-1, 1:-1] = neigh >= 5.0
+
+        fg_ratio = float(np.mean(clean_mask))
+        if fg_ratio < 0.06 or fg_ratio > 0.95:
             return default_pts
 
-        ys, xs = np.where(mask)
-        if len(xs) < 50:
+        ys, xs = np.where(clean_mask)
+        if len(xs) < 60:
             return default_pts
 
         nx = xs.astype(np.float32) / float(sw - 1)
         ny = ys.astype(np.float32) / float(sh - 1)
 
-        # Find extreme points along diagonal axes (x+y and x-y)
+        # Use robust 1% / 99% quantile neighbourhood along diagonal projections (x+y and x-y)
         s = nx + ny
         d = nx - ny
 
-        idx_tl = int(np.argmin(s))
-        idx_br = int(np.argmax(s))
-        idx_tr = int(np.argmax(d))
-        idx_bl = int(np.argmin(d))
+        def _robust_extreme(metric, pick_max: bool):
+            q = np.percentile(metric, 99.0 if pick_max else 1.0)
+            sel = (metric >= q) if pick_max else (metric <= q)
+            return float(np.median(nx[sel])), float(np.median(ny[sel]))
+
+        tl = _robust_extreme(s, False)
+        br = _robust_extreme(s, True)
+        tr = _robust_extreme(d, True)
+        bl = _robust_extreme(d, False)
 
         pts = [
-            (float(np.clip(nx[idx_tl], 0.02, 0.98)), float(np.clip(ny[idx_tl], 0.02, 0.98))),
-            (float(np.clip(nx[idx_tr], 0.02, 0.98)), float(np.clip(ny[idx_tr], 0.02, 0.98))),
-            (float(np.clip(nx[idx_br], 0.02, 0.98)), float(np.clip(ny[idx_br], 0.02, 0.98))),
-            (float(np.clip(nx[idx_bl], 0.02, 0.98)), float(np.clip(ny[idx_bl], 0.02, 0.98)))
+            (float(np.clip(tl[0], 0.015, 0.985)), float(np.clip(tl[1], 0.015, 0.985))),
+            (float(np.clip(tr[0], 0.015, 0.985)), float(np.clip(tr[1], 0.015, 0.985))),
+            (float(np.clip(br[0], 0.015, 0.985)), float(np.clip(br[1], 0.015, 0.985))),
+            (float(np.clip(bl[0], 0.015, 0.985)), float(np.clip(bl[1], 0.015, 0.985)))
         ]
         ordered = order_quad_points(pts)
         return [{"x": round(p[0], 4), "y": round(p[1], 4)} for p in ordered]

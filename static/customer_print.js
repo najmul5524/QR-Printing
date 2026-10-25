@@ -1661,6 +1661,9 @@
       cropper = null;
     }
     const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
+    const fastSrc = (!uploadedFile.is_nid && instantLocalUrl)
+      ? instantLocalUrl
+      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}`;
     target.onload = () => {
       cropper = new Cropper(target, {
         viewMode: 1,
@@ -1672,14 +1675,16 @@
         }
       });
     };
-    target.src = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1000&v=${fileRev}${sideParam}`;
+    target.src = fastSrc;
   }
 
   function loadCropTargetImage() {
     initSmartCanvasEvents();
     resetSmartPtsDefault();
     const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
-    const imgUrl = `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1000&v=${fileRev}${sideParam}`;
+    const imgUrl = (!uploadedFile.is_nid && instantLocalUrl)
+      ? instantLocalUrl
+      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}`;
 
     smartImg = new Image();
     smartImg.crossOrigin = 'anonymous';
@@ -1711,6 +1716,207 @@
 
   let pendingCropBlob = null;
   let pendingCropPreviewUrl = null;
+  let baseWarpedCanvas = null;
+  let currentCropEnhanceFx = 'none';
+
+  // Fast 8x8 linear solver for 4-point projective homography (dst -> src)
+  function solveHomography8x8(srcPts, dstW, dstH) {
+    const dstPts = [
+      [0, 0],
+      [dstW, 0],
+      [dstW, dstH],
+      [0, dstH]
+    ];
+    const A = [];
+    const B = [];
+    for (let i = 0; i < 4; i++) {
+      const x = dstPts[i][0], y = dstPts[i][1];
+      const u = srcPts[i][0], v = srcPts[i][1];
+      A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]);
+      B.push(u);
+      A.push([0, 0, 0, x, y, 1, -x * v, -y * v]);
+      B.push(v);
+    }
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      let maxRow = i;
+      for (let k = i + 1; k < n; k++) {
+        if (Math.abs(A[k][i]) > Math.abs(A[maxRow][i])) maxRow = k;
+      }
+      const tmpA = A[i]; A[i] = A[maxRow]; A[maxRow] = tmpA;
+      const tmpB = B[i]; B[i] = B[maxRow]; B[maxRow] = tmpB;
+      const piv = A[i][i] || 1e-12;
+      for (let k = i + 1; k < n; k++) {
+        const c = A[k][i] / piv;
+        for (let j = i; j < n; j++) A[k][j] -= c * A[i][j];
+        B[k] -= c * B[i];
+      }
+    }
+    const h = new Array(8).fill(0);
+    for (let i = n - 1; i >= 0; i--) {
+      let s = B[i];
+      for (let j = i + 1; j < n; j++) s -= A[i][j] * h[j];
+      h[i] = s / (A[i][i] || 1e-12);
+    }
+    return h;
+  }
+
+  function warpPerspectiveClientSide(imgEl, pts, ratioKey) {
+    const sw = imgEl.naturalWidth || imgEl.width;
+    const sh = imgEl.naturalHeight || imgEl.height;
+    const p = pts.map(pt => [pt.x * sw, pt.y * sh]);
+    const wTop = Math.hypot(p[1][0] - p[0][0], p[1][1] - p[0][1]);
+    const wBot = Math.hypot(p[2][0] - p[3][0], p[2][1] - p[3][1]);
+    const hLeft = Math.hypot(p[3][0] - p[0][0], p[3][1] - p[0][1]);
+    const hRight = Math.hypot(p[2][0] - p[1][0], p[2][1] - p[1][1]);
+
+    let outW = Math.max(120, Math.round((wTop + wBot) * 0.5));
+    let outH = Math.max(120, Math.round((hLeft + hRight) * 0.5));
+
+    const rMap = { nid: 85.6 / 54.0, passport: 35.0 / 45.0, stamp: 20.0 / 25.0, square: 1.0, a4: 210.0 / 297.0 };
+    const tr = rMap[ratioKey] || null;
+    if (tr) {
+      if (outW >= outH * tr) outH = Math.max(120, Math.round(outW / tr));
+      else outW = Math.max(120, Math.round(outH * tr));
+    }
+
+    const maxDim = 1000;
+    if (Math.max(outW, outH) > maxDim) {
+      const sc = maxDim / Math.max(outW, outH);
+      outW = Math.max(80, Math.round(outW * sc));
+      outH = Math.max(80, Math.round(outH * sc));
+    }
+
+    const srcCvs = document.createElement('canvas');
+    srcCvs.width = sw;
+    srcCvs.height = sh;
+    const sCtx = srcCvs.getContext('2d');
+    sCtx.drawImage(imgEl, 0, 0);
+    const srcData = sCtx.getImageData(0, 0, sw, sh).data;
+
+    const dstCvs = document.createElement('canvas');
+    dstCvs.width = outW;
+    dstCvs.height = outH;
+    const dCtx = dstCvs.getContext('2d');
+    const dstImgData = dCtx.createImageData(outW, outH);
+    const dstData = dstImgData.data;
+
+    const h = solveHomography8x8(p, outW, outH);
+    const h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4], h5 = h[5], h6 = h[6], h7 = h[7];
+
+    let idx = 0;
+    const maxX = sw - 1, maxY = sh - 1;
+    for (let y = 0; y < outH; y++) {
+      const hy1 = h1 * y + h2;
+      const hy4 = h4 * y + h5;
+      const hy7 = h7 * y + 1.0;
+      for (let x = 0; x < outW; x++) {
+        const w = 1.0 / (h6 * x + hy7);
+        let u = (h0 * x + hy1) * w;
+        let v = (h3 * x + hy4) * w;
+        if (u < 0) u = 0; else if (u > maxX) u = maxX;
+        if (v < 0) v = 0; else if (v > maxY) v = maxY;
+        const x0 = u | 0, y0 = v | 0;
+        const sIdx = (y0 * sw + x0) << 2;
+        dstData[idx] = srcData[sIdx];
+        dstData[idx + 1] = srcData[sIdx + 1];
+        dstData[idx + 2] = srcData[sIdx + 2];
+        dstData[idx + 3] = 255;
+        idx += 4;
+      }
+    }
+    dCtx.putImageData(dstImgData, 0, 0);
+    return dstCvs;
+  }
+
+  function applyClientCropFilterToCanvas(baseCvs, fx) {
+    if (!baseCvs || fx === 'none') return baseCvs;
+    const w = baseCvs.width, h = baseCvs.height;
+    const outCvs = document.createElement('canvas');
+    outCvs.width = w;
+    outCvs.height = h;
+    const ctx = outCvs.getContext('2d');
+    ctx.drawImage(baseCvs, 0, 0);
+    const imgD = ctx.getImageData(0, 0, w, h);
+    const d = imgD.data;
+
+    // Sample 88th percentile luminance for white paper normalization
+    const lumHist = new Uint32Array(256);
+    const step = Math.max(4, ((d.length >> 2) / 8000) | 0) << 2;
+    let totalSamples = 0;
+    for (let i = 0; i < d.length; i += step) {
+      const l = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+      lumHist[l]++;
+      totalSamples++;
+    }
+    let acc = 0, whitePt = 225;
+    const targetCnt = totalSamples * 0.88;
+    for (let k = 0; k < 256; k++) {
+      acc += lumHist[k];
+      if (acc >= targetCnt) {
+        whitePt = Math.max(155, k);
+        break;
+      }
+    }
+
+    const invScale = 255.0 / (whitePt * 0.94);
+    for (let i = 0; i < d.length; i += 4) {
+      let r = Math.min(255, d[i] * invScale);
+      let g = Math.min(255, d[i + 1] * invScale);
+      let b = Math.min(255, d[i + 2] * invScale);
+
+      if (fx === 'bw_doc') {
+        const l = (r * 0.299 + g * 0.587 + b * 0.114);
+        let v = l > 202 ? 255 : (l < 115 ? Math.max(0, (l - 65) * 0.5) : ((l - 115) / 87.0) * 255);
+        d[i] = d[i + 1] = d[i + 2] = v;
+      } else if (fx === 'magic_color') {
+        // S-curve + paper whitening
+        r = r > 224 ? 255 : Math.max(0, Math.min(255, (r - 128) * 1.32 + 132));
+        g = g > 224 ? 255 : Math.max(0, Math.min(255, (g - 128) * 1.32 + 132));
+        b = b > 224 ? 255 : Math.max(0, Math.min(255, (b - 128) * 1.32 + 132));
+        d[i] = r; d[i + 1] = g; d[i + 2] = b;
+      } else if (fx === 'hd_clear') {
+        r = Math.max(0, Math.min(255, (r - 128) * 1.18 + 132));
+        g = Math.max(0, Math.min(255, (g - 128) * 1.18 + 132));
+        b = Math.max(0, Math.min(255, (b - 128) * 1.18 + 132));
+        d[i] = r; d[i + 1] = g; d[i + 2] = b;
+      }
+    }
+    ctx.putImageData(imgD, 0, 0);
+    return outCvs;
+  }
+
+  window.setCropEnhanceFilter = function(fx) {
+    currentCropEnhanceFx = fx || 'none';
+    const labels = {
+      none: 'আসল ক্রপ',
+      magic_color: '✨ ম্যাজিক ক্লিয়ার',
+      hd_clear: '💎 HD ক্লিয়ার',
+      bw_doc: '🖨️ সাদাকালো'
+    };
+    ['none', 'magic_color', 'hd_clear', 'bw_doc'].forEach(k => {
+      const b = $('cropFx_' + k);
+      if (!b) return;
+      const on = k === currentCropEnhanceFx;
+      b.className = on
+        ? 'py-1.5 px-1.5 rounded-lg font-bold border-2 border-emerald-600 bg-emerald-50 text-emerald-900 shadow-sm'
+        : 'py-1.5 px-1.5 rounded-lg font-bold border border-gray-200 bg-gray-50 text-gray-700 hover:border-emerald-500';
+    });
+    const badge = $('cropPreviewFilterBadge');
+    if (badge) badge.innerText = labels[currentCropEnhanceFx] || 'প্রস্তুত';
+
+    if (baseWarpedCanvas) {
+      const outCvs = applyClientCropFilterToCanvas(baseWarpedCanvas, currentCropEnhanceFx);
+      outCvs.toBlob((blob) => {
+        if (!blob) return;
+        pendingCropBlob = blob;
+        if (pendingCropPreviewUrl) URL.revokeObjectURL(pendingCropPreviewUrl);
+        pendingCropPreviewUrl = URL.createObjectURL(blob);
+        const resImg = $('cropResultPreviewImg');
+        if (resImg) resImg.src = pendingCropPreviewUrl;
+      }, 'image/jpeg', 0.93);
+    }
+  };
 
   window.backToCropEditor = function() {
     if ($('cropLiveResultView')) $('cropLiveResultView').classList.add('hidden');
@@ -1738,6 +1944,8 @@
     if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
     modal.classList.remove('hidden');
 
+    currentCropEnhanceFx = 'none';
+    window.setCropEnhanceFilter('none');
     window.backToCropEditor();
     window.setSmartRatio(uploadedFile.is_nid ? 'nid' : 'auto');
     window.setCropMode('smart');
@@ -1762,6 +1970,7 @@
       pendingCropPreviewUrl = null;
     }
     pendingCropBlob = null;
+    baseWarpedCanvas = null;
   };
 
   window.setCropRatio = function(ratio) {
@@ -1794,7 +2003,7 @@
     if (cropper) cropper.rotate(deg);
   };
 
-  // Step 1 -> Step 2: Generate straightened/cropped image and show it LIVE inside the modal
+  // Step 1 -> Step 2: Generate straightened/cropped image INSTANTLY in-browser (<35ms) and show it LIVE inside the modal
   window.previewCroppedImage = async function() {
     if (!uploadedFile) return;
     const btn = $('btnPreviewCrop');
@@ -1805,6 +2014,24 @@
 
     if (cropMode === 'smart') {
       try {
+        // Fast path: Instant client-side 4-point perspective warp (0ms network wait!)
+        if (smartImg && smartImg.complete && (smartImg.naturalWidth || smartImg.width) > 0) {
+          baseWarpedCanvas = warpPerspectiveClientSide(smartImg, smartPts, smartTargetRatio);
+          const outCvs = applyClientCropFilterToCanvas(baseWarpedCanvas, currentCropEnhanceFx);
+          outCvs.toBlob((blob) => {
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
+            }
+            if (!blob) return;
+            pendingCropBlob = blob;
+            if (pendingCropPreviewUrl) URL.revokeObjectURL(pendingCropPreviewUrl);
+            pendingCropPreviewUrl = URL.createObjectURL(blob);
+            showCropStep2LiveResult(pendingCropPreviewUrl);
+          }, 'image/jpeg', 0.93);
+          return;
+        }
+
         const res = await fetch('/api/image/perspective-crop-preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1812,7 +2039,8 @@
             file_id: uploadedFile.file_id,
             side: cropNidSide,
             points: smartPts,
-            ratio: smartTargetRatio
+            ratio: smartTargetRatio,
+            enhance_mode: currentCropEnhanceFx
           })
         });
         if (!res.ok) {
@@ -1846,7 +2074,17 @@
       return;
     }
 
-    cropper.getCroppedCanvas({ maxWidth: 2400, maxHeight: 2400 }).toBlob((blob) => {
+    baseWarpedCanvas = cropper.getCroppedCanvas({ maxWidth: 2200, maxHeight: 2200 });
+    if (!baseWarpedCanvas) {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
+      }
+      alert('ক্যানভাস থেকে ছবি তৈরি করা যায়নি।');
+      return;
+    }
+    const outCvs = applyClientCropFilterToCanvas(baseWarpedCanvas, currentCropEnhanceFx);
+    outCvs.toBlob((blob) => {
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = '<span>✂️</span> <span>ক্রপ ও সোজা করুন</span>';
@@ -1880,7 +2118,8 @@
             file_id: uploadedFile.file_id,
             side: cropNidSide,
             points: smartPts,
-            ratio: smartTargetRatio
+            ratio: smartTargetRatio,
+            enhance_mode: currentCropEnhanceFx
           })
         });
         const data = await res.json();
@@ -1926,20 +2165,51 @@
     }
   };
 
-  // ── CamScanner Enhancer with Live Before/After Preview ──
+  // ── CamScanner Enhancer with Instant Blob Cache & Strength Control ──
   let currentCamscanMode = 'magic_color';
+  let currentCamscanStrength = 'normal';
+  const camscanBlobCache = new Map();
+
   const CAM_LABELS = {
     original: '🖼️ আসল ছবি (Original)',
     magic_color: '✨ ম্যাজিক কালার',
+    hd_clear: '💎 HD ক্লিয়ার (আইডি/ডকুমেন্ট)',
     bw_doc: '🖨️ ফটোকপি (B&W)',
     grayscale: '◐ গ্রে-স্কেল'
   };
+
+  function getCamscanCacheKey(mode, strength) {
+    if (!uploadedFile) return '';
+    const effStr = mode === 'original' ? 'normal' : (strength || 'normal');
+    return `${uploadedFile.file_id}|${fileRev}|${mode}|${effStr}`;
+  }
+
+  function prefetchCamscanModes() {
+    if (!uploadedFile) return;
+    const modesToPreload = ['magic_color', 'hd_clear', 'bw_doc', 'original', 'grayscale'];
+    modesToPreload.forEach((m, idx) => {
+      const key = getCamscanCacheKey(m, currentCamscanStrength);
+      if (camscanBlobCache.has(key)) return;
+      setTimeout(() => {
+        if (!uploadedFile || camscanBlobCache.has(key)) return;
+        const url = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(m)}&strength=${encodeURIComponent(currentCamscanStrength)}&v=${fileRev}`;
+        fetch(url)
+          .then(r => r.ok ? r.blob() : null)
+          .then(b => {
+            if (b) camscanBlobCache.set(key, URL.createObjectURL(b));
+          })
+          .catch(() => {});
+      }, idx * 120);
+    });
+  }
 
   window.openCamscanModal = function() {
     if (!uploadedFile || uploadedFile.file_type !== 'image') return;
     const modal = $('camscanModal');
     if (modal) modal.classList.remove('hidden');
+    window.setCamscanStrength(currentCamscanStrength, true);
     window.selectCamscanMode('magic_color');
+    prefetchCamscanModes();
   };
 
   window.closeCamscanModal = function() {
@@ -1947,35 +2217,74 @@
     if (modal) modal.classList.add('hidden');
   };
 
+  window.setCamscanStrength = function(strength, skipReload) {
+    currentCamscanStrength = ['light', 'normal', 'strong'].includes(strength) ? strength : 'normal';
+    ['light', 'normal', 'strong'].forEach(s => {
+      const b = $('camStr_' + s);
+      if (!b) return;
+      const on = s === currentCamscanStrength;
+      b.className = on
+        ? 'py-1 px-2 rounded-lg font-bold border-2 border-emerald-600 bg-emerald-50 text-emerald-900 shadow-sm'
+        : 'py-1 px-2 rounded-lg font-bold border border-gray-200 bg-white text-gray-600 hover:border-emerald-400';
+    });
+    if (!skipReload && currentCamscanMode !== 'original') {
+      window.selectCamscanMode(currentCamscanMode);
+    }
+  };
+
   window.selectCamscanMode = function(mode) {
     if (!uploadedFile) return;
     currentCamscanMode = mode;
-    ['original', 'magic_color', 'bw_doc', 'grayscale'].forEach(m => {
+    ['original', 'magic_color', 'hd_clear', 'bw_doc', 'grayscale'].forEach(m => {
       const b = $('camBtn_' + m);
       if (!b) return;
       const on = m === mode;
       b.className = on
-        ? 'cam-mode-btn p-2 border-2 border-emerald-600 bg-emerald-50 text-emerald-900 rounded-xl font-bold shadow-sm'
-        : 'cam-mode-btn p-2 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700';
+        ? 'cam-mode-btn p-1.5 border-2 border-emerald-600 bg-emerald-50 text-emerald-900 rounded-xl font-bold shadow-sm'
+        : 'cam-mode-btn p-1.5 border-2 border-gray-200 hover:border-emerald-500 rounded-xl font-bold bg-gray-50 text-gray-700';
     });
+
+    const strBar = $('camscanStrengthBar');
+    if (strBar) {
+      strBar.style.opacity = mode === 'original' ? '0.45' : '1';
+      strBar.style.pointerEvents = mode === 'original' ? 'none' : 'auto';
+    }
 
     const badge = $('camscanModeBadge');
     if (badge) badge.innerText = CAM_LABELS[mode] || mode;
 
     const img = $('camscanPreviewImg');
     const loader = $('camscanLoading');
-    if (img && loader) {
-      loader.classList.remove('hidden');
-      img.classList.add('hidden');
-      img.onload = () => {
-        loader.classList.add('hidden');
-        img.classList.remove('hidden');
-      };
-      img.onerror = () => {
-        loader.innerText = '⚠️ প্রিভিউ লোড করা যায়নি';
-      };
-      img.src = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(mode)}&t=${Date.now()}`;
+    if (!img || !loader) return;
+
+    const cacheKey = getCamscanCacheKey(mode, currentCamscanStrength);
+    if (camscanBlobCache.has(cacheKey)) {
+      loader.classList.add('hidden');
+      img.classList.remove('hidden');
+      img.src = camscanBlobCache.get(cacheKey);
+      return;
     }
+
+    loader.classList.remove('hidden');
+    img.classList.add('hidden');
+    const previewUrl = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(mode)}&strength=${encodeURIComponent(currentCamscanStrength)}&v=${fileRev}`;
+    fetch(previewUrl)
+      .then(r => {
+        if (!r.ok) throw new Error('Preview error');
+        return r.blob();
+      })
+      .then(blob => {
+        const objUrl = URL.createObjectURL(blob);
+        camscanBlobCache.set(cacheKey, objUrl);
+        if (currentCamscanMode === mode) {
+          img.src = objUrl;
+          loader.classList.add('hidden');
+          img.classList.remove('hidden');
+        }
+      })
+      .catch(() => {
+        loader.innerText = '⚠️ প্রিভিউ লোড করা যায়নি';
+      });
   };
 
   window.saveCamscanEffect = async function() {
@@ -1991,16 +2300,20 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           file_id: uploadedFile.file_id,
-          mode: currentCamscanMode
+          mode: currentCamscanMode,
+          strength: currentCamscanStrength
         })
       });
       const data = await res.json();
       if (data.success) {
+        const cachedUrl = camscanBlobCache.get(getCamscanCacheKey(currentCamscanMode, currentCamscanStrength));
+        if (!uploadedFile.is_nid && cachedUrl) {
+          instantLocalUrl = cachedUrl;
+        }
         bumpFileRev();
         closeCamscanModal();
         refreshTopLivePreview(true);
         if (currentMode === 'studio') scheduleStudio();
-        alert('✓ স্ক্যান ইফেক্ট সফলভাবে সেভ হয়েছে!');
       } else {
         alert('স্ক্যানার ইফেক্ট ব্যর্থ: ' + (data.detail || ''));
       }
