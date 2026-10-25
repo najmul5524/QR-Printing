@@ -1,11 +1,9 @@
-// Universal WebRTC Direct Peer-to-Peer High-Speed File Transfer Engine
-// Tuned for maximum local Wi-Fi throughput (20-50 MB/s), 1GB+ files with zero RAM crashes
+// Universal WebRTC Direct Peer-to-Peer High-Speed Transfer Engine (Tuned for Zero Bufferbloat)
 (function() {
-  const CHUNK_SIZE = 64 * 1024;            // 64 KB (standard safe SCTP chunk)
-  const BLOCK_SIZE = 2 * 1024 * 1024;      // 2 MB (read disk in 2MB blocks -> 32x fewer disk I/O calls)
-  const BUFFER_LOW_THRESHOLD = 2 * 1024 * 1024; // 2 MB (resume pumping when buffer drains below 2MB)
-  const BUFFER_MAX = 8 * 1024 * 1024;      // 8 MB (pause pumping when buffer reaches 8MB)
-  const BATCH_FLUSH_BYTES = 16 * 1024 * 1024; // 16 MB (flush received chunks to Blob storage to save RAM)
+  const CHUNK_SIZE = 32 * 1024;             // 32 KB (optimal SCTP MTU without fragmentation)
+  const BUFFER_LOW_THRESHOLD = 64 * 1024;   // 64 KB
+  const BUFFER_MAX = 256 * 1024;            // 256 KB (prevents bufferbloat and RTT collapse)
+  const BATCH_FLUSH_BYTES = 8 * 1024 * 1024;// 8 MB Blob chunks for memory safety
 
   const ICE_SERVERS = [
     { urls: 'stun:stun.cloudflare.com:3478' },
@@ -23,6 +21,7 @@
   let peerReady = false;
   let makingOffer = false;
   let pendingCandidates = [];
+  let statsInterval = null;
 
   // Receiver state
   let incomingInfo = null;
@@ -50,6 +49,7 @@
   function cleanupPeerConnection() {
     peerReady = false;
     pendingCandidates = [];
+    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
     if (dc) {
       try { dc.close(); } catch (e) {}
       dc = null;
@@ -78,9 +78,13 @@
       pc.onconnectionstatechange = () => {
         if (!pc) return;
         if (pc.connectionState === 'connected') {
+          peerReady = true;
           updateP2PStatus('connected');
+          checkConnectionQuality();
+          if (!statsInterval) statsInterval = setInterval(checkConnectionQuality, 3000);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
           peerReady = false;
+          if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
           updateP2PStatus('disconnected');
         }
       };
@@ -188,6 +192,7 @@
     channel.onopen = () => {
       peerReady = true;
       updateP2PStatus('connected');
+      checkConnectionQuality();
     };
     channel.onclose = () => {
       peerReady = false;
@@ -198,56 +203,95 @@
     };
   }
 
+  async function checkConnectionQuality() {
+    if (!pc) return;
+    try {
+      const stats = await pc.getStats();
+      let rttMs = null;
+      let localCandidateType = '';
+      for (const report of stats.values()) {
+        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          if (report.currentRoundTripTime !== undefined) {
+            rttMs = Math.round(report.currentRoundTripTime * 1000);
+          }
+          const local = stats.get(report.localCandidateId);
+          if (local && local.candidateType) {
+            localCandidateType = local.candidateType;
+          }
+        }
+      }
+
+      const badge = document.getElementById('p2pStatusBadge');
+      if (badge && peerReady) {
+        if (localCandidateType === 'host' || (rttMs !== null && rttMs < 25)) {
+          badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-green-100 text-green-800 flex items-center gap-1 cursor-pointer';
+          badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ ডিরেক্ট লোকাল ওয়াইফাই (${rttMs !== null ? rttMs + 'ms' : 'LAN'})`;
+          badge.onclick = null;
+        } else {
+          badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-blue-100 text-blue-800 flex items-center gap-1 cursor-pointer hover:bg-blue-200';
+          badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> 🌐 ইন্টারনেট P2P (${rttMs !== null ? rttMs + 'ms' : 'STUN'}) • ⚡ স্পিড বাড়ান`;
+          badge.onclick = () => window.showP2PHelpModal(true);
+        }
+      }
+    } catch (e) {}
+  }
+
   function updateP2PStatus(state) {
     const badge = document.getElementById('p2pStatusBadge');
     if (!badge) return;
     if (state === 'connected') {
       badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-green-100 text-green-800 flex items-center gap-1 cursor-pointer';
-      badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ ডিরেক্ট ওয়াইফাই স্পিড (${esc(myDevice)} ⇄ ${esc(remoteDevice)})`;
+      badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ⚡ ডিরেক্ট সংযুক্ত (${esc(myDevice)} ⇄ ${esc(remoteDevice)})`;
       badge.onclick = null;
     } else {
       badge.className = 'text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 flex items-center gap-1 cursor-pointer hover:bg-amber-200';
       badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> ☁️ ক্লাউড ও P2P রেডি (৫০ MB+) • ❓ সাহায্য';
-      badge.onclick = () => window.showP2PHelpModal();
+      badge.onclick = () => window.showP2PHelpModal(false);
     }
   }
 
-  window.showP2PHelpModal = function() {
+  window.showP2PHelpModal = function(isOverInternet) {
     let m = document.getElementById('p2pHelpModal');
-    if (m) { m.classList.remove('hidden'); return; }
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'p2pHelpModal';
+      m.className = 'fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+      document.body.appendChild(m);
+    }
+    m.classList.remove('hidden');
 
-    m = document.createElement('div');
-    m.id = 'p2pHelpModal';
-    m.className = 'fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+    const warningHtml = isOverInternet ? `
+      <div class="bg-amber-50 border border-amber-300 p-3 rounded-xl text-amber-900 space-y-1">
+        <p class="font-bold flex items-center gap-1"><span>⚠️</span> <span>আপনার ডিভাইস দুটি বর্তমানে ইন্টারনেটের মাধ্যমে যুক্ত রয়েছে!</span></p>
+        <p class="text-[11px]">একটি ডিভাইস হয়তো মোবাইল ডাটায় (SIM) আছে অথবা ওয়াইফাই রাউটার লোকাল কানেকশন ব্লক করছে। ইন্টারনেট দিয়ে ফাইল গেলে মোবাইল ডাটার স্পিডে (২৫০ KB/s - ১ MB/s) যাবে।</p>
+      </div>
+    ` : '';
+
     m.innerHTML = `
       <div class="bg-white max-w-md w-full rounded-2xl p-5 shadow-2xl border space-y-3.5 text-xs">
         <div class="flex items-center justify-between border-b pb-2.5">
           <h3 class="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-            <span>⚡</span> <span>মোবাইল ↔ মোবাইল ও পিসি ↔ পিসি ফাইল ট্রান্সফার গাইড</span>
+            <span>⚡</span> <span>সর্বোচ্চ ওয়াইফাই স্পিড (২০-৪০ MB/s) পাওয়ার নিয়ম</span>
           </h3>
           <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
         </div>
-        <p class="text-gray-600">
-          এই পেজ থেকে আপনি <b>মোবাইল থেকে মোবাইলে, পিসি থেকে পিসিতে বা মোবাইল থেকে পিসিতে</b> যেকোনো ফাইল পাঠাতে পারবেন।
-        </p>
+        ${warningHtml}
         <div class="space-y-2 bg-gray-50 p-3 rounded-xl border">
-          <p class="font-bold text-gray-800">কিভাবে সর্বোচ্চ স্পিড পাবেন:</p>
+          <p class="font-bold text-gray-800">রকেট স্পিড পেতে নিচের যেকোনো ১টি করুন:</p>
           <ul class="list-disc list-inside space-y-1.5 text-gray-700">
-            <li><b>১ম ডিভাইসে (মোবাইল বা পিসি):</b> রুমের QR কোড বা ৮ অক্ষরের কোডটি খোলা রাখুন।</li>
-            <li><b>২য় ডিভাইসে (অন্য মোবাইল বা পিসি):</b> ক্যামেরা দিয়ে QR স্ক্যান করুন অথবা <b>/transfer</b> পেজে গিয়ে ৮ অক্ষরের কোডটি লিখে "যোগ দিন" চাপুন।</li>
-            <li><b>একই ওয়াইফাই বা হটস্পটে থাকলে:</b> ডিরেক্ট P2P চালু হয়ে যাবে এবং ১০০ MB / ১ GB+ ফাইলও ২০-৫০ MB/s স্পিডে চলে যাবে।</li>
-            <li><b>ভিন্ন নেটওয়ার্কে/মোবাইল ডাটায় থাকলে:</b> ৫০ MB পর্যন্ত যেকোনো ফাইল স্বয়ংক্রিয়ভাবে ক্লাউডের মাধ্যমে সাথে সাথে অপর ডিভাইসে চলে যাবে।</li>
+            <li><b>উভয় ডিভাইস একই ওয়াইফাইতে রাখুন:</b> মোবাইল ও কম্পিউটার দুটোই একই ওয়াইফাই রাউটারে কানেক্ট থাকলে সরাসরি লোকাল লিংকে সর্বোচ্চ স্পিডে যাবে।</li>
+            <li><b>অথবা মোবাইল হটস্পট চালু করুন:</b> মোবাইলের Hotspot চালু করে কম্পিউটারটিকে সেই Hotspot-এ কানেক্ট করুন। কোনো ইন্টারনেট ছাড়াই ২০-৫০ MB/s স্পিডে যাবে!</li>
+            <li><b>মোবাইল ডাটা (SIM) অফ রাখুন:</b> ফাইল ট্রান্সফার করার সময় মোবাইল ডাটা অফ রেখে ওয়াইফাইতে থাকলে ইন্টারনেট ট্রাফিকের স্পিড লিমিটেশন থাকে না।</li>
           </ul>
         </div>
-        <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="w-full py-2.5 bg-gray-900 text-white font-bold rounded-xl text-center">
+        <button onclick="document.getElementById('p2pHelpModal').classList.add('hidden')" class="w-full py-2.5 bg-gray-900 hover:bg-black text-white font-bold rounded-xl text-center transition">
           বুঝেছি, ঠিক আছে
         </button>
       </div>
     `;
-    document.body.appendChild(m);
   };
 
-  // High-Speed sender engine using Block Reading & Hardware Low-Buffer Streaming
+  // High-Speed sender engine tuned for continuous streaming (Zero bufferbloat)
   window.sendP2PFile = function(file, onProgress) {
     if (!dc || dc.readyState !== 'open') return false;
 
@@ -263,91 +307,94 @@
       sender: myDevice
     }));
 
-    let fileOffset = 0;
-    let currentBlock = null;
-    let blockOffset = 0;
-    let isReadingBlock = false;
-    let isPausedForBuffer = false;
+    let offset = 0;
     const startTime = Date.now();
     let lastProgressTime = 0;
+    let isReading = false;
     let isFinished = false;
+    let watchdog = null;
 
-    function reportProgress(force) {
+    function report(force) {
       const now = Date.now();
-      if (!force && (now - lastProgressTime < 120) && fileOffset < file.size) return;
+      if (!force && (now - lastProgressTime < 100) && offset < file.size) return;
       lastProgressTime = now;
-      const elapsedSec = (now - startTime) / 1000;
-      const speedBps = elapsedSec > 0.2 ? fileOffset / elapsedSec : 0;
-      if (onProgress) {
-        onProgress(fileOffset, file.size, speedBps);
-      }
+      const elapsed = (now - startTime) / 1000;
+      const speedBps = elapsed > 0.1 ? offset / elapsed : 0;
+      if (onProgress) onProgress(offset, file.size, speedBps);
     }
 
-    function readNextBlock(callback) {
-      if (fileOffset >= file.size) {
-        callback(null);
-        return;
-      }
-      isReadingBlock = true;
-      const reader = new FileReader();
-      const end = Math.min(file.size, fileOffset + BLOCK_SIZE);
-      const slice = file.slice(fileOffset, end);
-      reader.onload = (e) => {
-        isReadingBlock = false;
-        currentBlock = e.target.result;
-        blockOffset = 0;
-        callback(currentBlock);
-      };
-      reader.onerror = () => {
-        isReadingBlock = false;
-        console.error('FileReader error on slice');
-      };
-      reader.readAsArrayBuffer(slice);
+    function schedulePump() {
+      if (watchdog) return;
+      watchdog = setTimeout(() => {
+        watchdog = null;
+        pump();
+      }, 15);
     }
 
     function pump() {
-      if (isFinished || !dc || dc.readyState !== 'open') return;
+      if (isFinished || isReading || !dc || dc.readyState !== 'open') return;
 
-      while (dc.bufferedAmount < BUFFER_MAX) {
-        if (!currentBlock || blockOffset >= currentBlock.byteLength) {
-          if (fileOffset >= file.size) {
-            isFinished = true;
-            reportProgress(true);
-            if (onProgress) onProgress(file.size, file.size, 0);
-            return;
-          }
-          if (isReadingBlock) return;
-          readNextBlock((block) => {
-            if (block) pump();
-          });
+      if (offset >= file.size) {
+        if (dc.bufferedAmount === 0) {
+          isFinished = true;
+          report(true);
+          if (onProgress) onProgress(file.size, file.size, 0);
+          return;
+        } else {
+          schedulePump();
           return;
         }
-
-        const chunkEnd = Math.min(currentBlock.byteLength, blockOffset + CHUNK_SIZE);
-        const chunk = currentBlock.slice(blockOffset, chunkEnd);
-        try {
-          dc.send(chunk);
-        } catch (err) {
-          console.warn('dc.send buffer full, pausing:', err);
-          isPausedForBuffer = true;
-          return;
-        }
-
-        const sent = chunk.byteLength;
-        blockOffset += sent;
-        fileOffset += sent;
-        reportProgress(false);
       }
 
-      // Buffer reached BUFFER_MAX; pause until bufferedamountlow event
-      isPausedForBuffer = true;
+      if (dc.bufferedAmount > BUFFER_MAX) {
+        schedulePump();
+        return;
+      }
+
+      // Read a 64 KB slice (2 chunks of 32 KB)
+      const sliceSize = Math.min(64 * 1024, file.size - offset);
+      isReading = true;
+      const reader = new FileReader();
+      const slice = file.slice(offset, offset + sliceSize);
+
+      reader.onload = (e) => {
+        isReading = false;
+        if (!dc || dc.readyState !== 'open') return;
+
+        const buf = e.target.result;
+        let bufOffset = 0;
+        while (bufOffset < buf.byteLength) {
+          const chunkEnd = Math.min(buf.byteLength, bufOffset + CHUNK_SIZE);
+          const chunk = buf.slice(bufOffset, chunkEnd);
+          try {
+            dc.send(chunk);
+          } catch (err) {
+            console.warn('dc.send error:', err);
+            break;
+          }
+          bufOffset += chunk.byteLength;
+          offset += chunk.byteLength;
+        }
+
+        report(false);
+
+        if (dc.bufferedAmount < BUFFER_MAX && offset < file.size) {
+          pump();
+        } else {
+          schedulePump();
+        }
+      };
+
+      reader.onerror = () => {
+        isReading = false;
+        console.error('File read error');
+      };
+
+      reader.readAsArrayBuffer(slice);
     }
 
     dc.onbufferedamountlow = () => {
-      if (isPausedForBuffer) {
-        isPausedForBuffer = false;
-        pump();
-      }
+      pump();
     };
 
     pump();
@@ -375,7 +422,7 @@
       currentBatchBytes += data.byteLength;
       receivedBytes += data.byteLength;
 
-      // Offload 16MB batches into Blob parts to keep JS heap small
+      // Offload 8MB batches into Blob parts to keep JS heap small
       if (currentBatchBytes >= BATCH_FLUSH_BYTES) {
         receivedBlobs.push(new Blob(currentBufferBatch));
         currentBufferBatch = [];
@@ -384,10 +431,10 @@
 
       if (incomingInfo) {
         const now = Date.now();
-        if (now - lastRecvUiTime > 120 || receivedBytes >= incomingInfo.size) {
+        if (now - lastRecvUiTime > 100 || receivedBytes >= incomingInfo.size) {
           lastRecvUiTime = now;
           const elapsed = (now - recvStartTime) / 1000;
-          const speedBps = elapsed > 0.2 ? receivedBytes / elapsed : 0;
+          const speedBps = elapsed > 0.1 ? receivedBytes / elapsed : 0;
           showP2PDownloadProgress(incomingInfo.name, incomingInfo.size, receivedBytes, speedBps);
         }
 
@@ -476,7 +523,7 @@
     item.innerHTML = `
       <div class="min-w-0">
         <p class="font-bold text-sm text-gray-900 truncate">⚡ ${esc(name)}</p>
-        <p class="text-[11px] text-green-700">ডিরেক্ট ওয়াইফাই ট্রান্সফার (${esc(sender || 'অন্য ডিভাইস')} থেকে) • ${fmtSize(size)}</p>
+        <p class="text-[11px] text-green-700">ডিরেক্ট ডিভাইস ট্রান্সফার (${esc(sender || 'অন্য ডিভাইস')} থেকে) • ${fmtSize(size)}</p>
       </div>
       <a href="${url}" download="${esc(name)}" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold shrink-0 shadow-sm">⬇️ সেভ করুন</a>
     `;
