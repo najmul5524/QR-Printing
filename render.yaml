@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: qr-se-print
+    name: qr-printing
     env: python
     healthCheckPath: /ping
     buildCommand: pip install -r requirements.txt
@@ -11,5 +11,4 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: BASE_URL
-        value: https://qr-se-print.onrender.com
-
+        value: https://qr-printing.onrender.com
