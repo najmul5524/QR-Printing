@@ -199,6 +199,7 @@
       ? ($('studioBw') && $('studioBw').value === '1')
       : ((checked('color_mode') || 'bw') === 'bw');
     const orient = checked('orientation') || 'portrait';
+    const colorParam = isBw ? 'bw' : 'color';
 
     if (sheet) {
       if (currentMode === 'studio') {
@@ -263,7 +264,6 @@
           if (btnNext) btnNext.disabled = docInlinePage >= totalSheets;
         }
 
-        const colorParam = isBw ? 'bw' : 'color';
         const pdfKey = `${uploadedFile.file_id}_${fileRev}_${colorParam}_${orient}_p${docInlinePage}_n${nup}`;
         img.style.filter = 'none';
         if (forceReloadImg || img.dataset.revKey !== pdfKey) {
