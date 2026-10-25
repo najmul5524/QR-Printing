@@ -2,9 +2,9 @@
 // Architecture: Pipelined Double-Buffered Disk Streaming + 64KB SCTP Framing + Low-Latency Network Flow Control
 (function() {
   const CHUNK_SIZE = 64 * 1024;             // 64 KB chunks
-  const BLOCK_SIZE = 2 * 1024 * 1024;       // 2 MB blocks (pipelined prefetch from disk)
-  const BUFFER_LOW_THRESHOLD = 256 * 1024;  // 256 KB
-  const BUFFER_MAX = 1024 * 1024;           // 1 MB network buffer ceiling (high throughput, zero bufferbloat)
+  const BLOCK_SIZE = 4 * 1024 * 1024;       // 4 MB blocks (pipelined prefetch from disk)
+  const BUFFER_LOW_THRESHOLD = 512 * 1024;  // 512 KB
+  const BUFFER_MAX = 2 * 1024 * 1024;       // 2 MB network buffer ceiling (tuned for 5-15 MB/s)
   const BATCH_FLUSH_BYTES = 16 * 1024 * 1024;// 16 MB Blob parts for receiver memory safety
 
   const ICE_SERVERS = [
@@ -282,7 +282,7 @@
           <p class="font-bold text-gray-800">রকেট স্পিড পেতে নিচের যেকোনো ১টি করুন:</p>
           <ul class="list-disc list-inside space-y-1.5 text-gray-700">
             <li><b>উভয় ডিভাইস একই ওয়াইফাইতে রাখুন:</b> মোবাইল ও কম্পিউটার দুটোই একই ওয়াইফাই রাউটারে কানেক্ট থাকলে সরাসরি লোকাল লিংকে সর্বোচ্চ স্পিডে যাবে।</li>
-            <li><b>অথবা মোবাইল হটস্পট চালু করুন:</b> মোবাইলের Hotspot চালু করে কম্পিউটারটিকে সেই Hotspot-এ কানেক্ট করুন। কোনো ইন্টারনেট ছাড়াই ২০-৫০ MB/s স্পিডে যাবে!</li>
+            <li><b>হটস্পট ৫.০ GHz করুন:</b> মোবাইলের Hotspot সেটিংসে গিয়ে <b>AP Band (ব্যান্ড)</b> ২.৪ GHz থেকে <b>৫.০ GHz</b> সিলেক্ট করুন। ২.৪ গিগাহার্জে সর্বোচ্চ ১-১.৫ MB/s ওঠে, কিন্তু ৫ গিগাহার্জ দিলে গতি <b>৫ থেকে ১৫+ MB/s</b> হয়ে যাবে!</li>
             <li><b>মোবাইল ডাটা (SIM) অফ রাখুন:</b> ফাইল ট্রান্সফার করার সময় মোবাইল ডাটা অফ রেখে ওয়াইফাইতে থাকলে ইন্টারনেট ট্রাফিকের স্পিড লিমিটেশন থাকে না।</li>
           </ul>
         </div>
@@ -397,18 +397,17 @@
           return;
         }
 
-        // Send next chunk from RAM
-        const chunkEnd = Math.min(activeBlock.byteLength, activeBlockOffset + CHUNK_SIZE);
-        const chunk = activeBlock.slice(activeBlockOffset, chunkEnd);
+        // Send next chunk from RAM (Zero-Copy TypedArray view)
+        const len = Math.min(CHUNK_SIZE, activeBlock.byteLength - activeBlockOffset);
+        const chunkView = new Uint8Array(activeBlock, activeBlockOffset, len);
         try {
-          dc.send(chunk);
+          dc.send(chunkView);
         } catch (err) {
           console.warn('dc.send full:', err);
           scheduleWatchdog();
           return;
         }
 
-        const len = chunk.byteLength;
         activeBlockOffset += len;
         sentOffset += len;
         report(false);
