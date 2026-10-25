@@ -2,6 +2,7 @@
    Globals injected by the template: SHOP_ID, SHOP_CODE, BKASH_NUM, NAGAD_NUM, RATES */
 (function () {
   const $ = (id) => document.getElementById(id);
+  window.$ = $;
   const MAX_BYTES = 50 * 1024 * 1024;
   const ACTIVE_TAB = 'py-2 rounded-xl font-bold text-[11px] sm:text-xs transition bg-pink-600 text-white shadow';
   const IDLE_TAB = 'py-2 rounded-xl font-bold text-[11px] sm:text-xs transition text-gray-600 hover:text-gray-900';
@@ -715,6 +716,12 @@
   window.handleAddStudioPhoto = async function(input) {
     if (!input.files || !input.files[0]) return;
     const file = input.files[0];
+    const btn = $('btnAddStudioPhoto');
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> <span>আপলোড হচ্ছে...</span>';
+    }
     const form = new FormData();
     form.append('file', file);
     try {
@@ -735,6 +742,10 @@
     } catch (e) {
       alert('ছবি আপলোড ব্যর্থ হয়েছে: ' + e);
     } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
       input.value = '';
     }
   };

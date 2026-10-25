@@ -427,7 +427,7 @@
           <span class="font-bold text-gray-800 flex items-center gap-1.5">
             <span>📸</span> <span>যুক্ত করা ছবিসমূহ (ফটো পুল):</span>
           </span>
-          <button type="button" onclick="$('inputAddStudioPhoto').click()" class="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm transition">
+          <button type="button" id="btnAddStudioPhoto" onclick="document.getElementById('inputAddStudioPhoto').click()" class="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm transition">
             <span>➕</span> <span>নতুন ছবি যোগ করুন</span>
           </button>
           <input type="file" id="inputAddStudioPhoto" accept="image/*" class="hidden" onchange="handleAddStudioPhoto(this)">
@@ -1287,6 +1287,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102516"></script>
+  <script src="/static/customer_print.js?v=2026102517"></script>
 </body>
 </html>
