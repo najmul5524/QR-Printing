@@ -1129,17 +1129,25 @@ async def save_office_editable_content(payload: dict = Body(...)):
         sheets = None
         html_body = str(payload.get("html", "<p>&nbsp;</p>"))
 
+    raw_margins = payload.get("margins")
+    margins_tuple = (
+        tuple(float(m) for m in raw_margins[:4])
+        if isinstance(raw_margins, list) and len(raw_margins) >= 4
+        else (36.0, 36.0, 36.0, 36.0)
+    )
+
     state = {
         "doc_kind": doc_kind,
         "title": title,
         "orientation": orientation,
+        "margins": list(margins_tuple),
         "html": html_body,
         "sheets": sheets,
     }
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
 
-    pages = await asyncio.to_thread(office_docs.render_html_to_pdf, html_body, src, orientation)
+    pages = await asyncio.to_thread(office_docs.render_html_to_pdf, html_body, src, orientation, margins_tuple)
     _update_orig_backup(src)
     return {
         "success": True,

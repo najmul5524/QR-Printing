@@ -138,14 +138,68 @@ def apply_camscan_to_all_pdf_pages(orig_pdf_path: str, dest_pdf_path: str, mode:
 
 def _try_native_office_to_pdf(raw_path: str, ext: str, pdf_out_path: str) -> bool:
     """
-    Attempts 100% pixel-exact conversion using LibreOffice (Linux/Windows) or Microsoft Office COM (Windows).
-    Returns True if pdf_out_path was successfully created and is a valid non-empty PDF.
+    Attempts 100% pixel-exact conversion using Microsoft Office COM (in-process win32com or PowerShell)
+    or headless LibreOffice (Linux/Windows). Returns True if pdf_out_path was successfully created.
     """
     abs_in = os.path.abspath(raw_path)
     abs_out = os.path.abspath(pdf_out_path)
     out_dir = os.path.dirname(abs_out)
 
-    # 1. Try LibreOffice / soffice if available
+    # 1. On Windows, try direct in-process Microsoft Office COM automation first (fastest & most reliable)
+    if sys.platform == "win32" and ext in ("doc", "docx", "rtf", "xls", "xlsx", "ppt", "pptx"):
+        try:
+            import win32com.client
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                if ext in ("doc", "docx", "rtf"):
+                    word = win32com.client.DispatchEx("Word.Application")
+                    word.Visible = False
+                    word.DisplayAlerts = 0
+                    try:
+                        doc = word.Documents.Open(abs_in, False, True)
+                        doc.ExportAsFixedFormat(abs_out, 17)  # 17 = wdExportFormatPDF
+                        doc.Close(0)
+                        if os.path.isfile(abs_out) and os.path.getsize(abs_out) > 200:
+                            return True
+                    finally:
+                        word.Quit()
+                elif ext in ("xls", "xlsx"):
+                    excel = win32com.client.DispatchEx("Excel.Application")
+                    excel.Visible = False
+                    excel.DisplayAlerts = False
+                    try:
+                        wb = excel.Workbooks.Open(abs_in, 0, True)
+                        for ws in wb.Worksheets:
+                            try:
+                                ws.PageSetup.PrintGridlines = True
+                            except Exception:
+                                pass
+                        wb.ExportAsFixedFormat(0, abs_out)
+                        wb.Close(False)
+                        if os.path.isfile(abs_out) and os.path.getsize(abs_out) > 200:
+                            return True
+                    finally:
+                        excel.Quit()
+                elif ext in ("ppt", "pptx"):
+                    ppt = win32com.client.DispatchEx("PowerPoint.Application")
+                    try:
+                        pr = ppt.Presentations.Open(abs_in, -1, 0, 0)
+                        pr.SaveAs(abs_out, 32)  # 32 = ppSaveAsPDF
+                        pr.Close()
+                        if os.path.isfile(abs_out) and os.path.getsize(abs_out) > 200:
+                            return True
+                    finally:
+                        ppt.Quit()
+            finally:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 2. Try LibreOffice / soffice if available (Linux or Windows without Office)
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if soffice:
         try:
@@ -163,7 +217,7 @@ def _try_native_office_to_pdf(raw_path: str, ext: str, pdf_out_path: str) -> boo
         except Exception:
             pass
 
-    # 2. On Windows, try Microsoft Office COM automation if installed
+    # 3. Fallback on Windows: PowerShell COM automation
     if sys.platform == "win32" and ext in ("doc", "docx", "rtf", "xls", "xlsx", "ppt", "pptx"):
         ps_in = abs_in.replace("'", "''")
         ps_out = abs_out.replace("'", "''")
@@ -216,16 +270,134 @@ def _clean_hex_color(val: Optional[str]) -> Optional[str]:
     return None
 
 
-def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
+def _parse_docx_numbering(zf: zipfile.ZipFile) -> Any:
+    """
+    Parses word/numbering.xml and returns a stateful closure `get_prefix(numId, ilvl)`
+    that accurately resolves multilevel auto-numbering (e.g. '1. ', '2. ', 'a. ', 'i. ', '• ').
+    """
+    if "word/numbering.xml" not in zf.namelist():
+        return lambda numId, ilvl: ""
+    try:
+        num_root = ET.fromstring(zf.read("word/numbering.xml"))
+    except Exception:
+        return lambda numId, ilvl: ""
+
+    num_to_abstract: Dict[str, str] = {}
+    for num in num_root.findall(f"{W_NS}num"):
+        num_id = num.attrib.get(f"{W_NS}numId")
+        ab_el = num.find(f"{W_NS}abstractNumId")
+        if num_id and ab_el is not None:
+            num_to_abstract[num_id] = ab_el.attrib.get(f"{W_NS}val", "")
+
+    levels: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for ab in num_root.findall(f"{W_NS}abstractNum"):
+        ab_id = ab.attrib.get(f"{W_NS}abstractNumId", "")
+        for lvl in ab.findall(f"{W_NS}lvl"):
+            ilvl_str = lvl.attrib.get(f"{W_NS}ilvl", "0")
+            numFmt_el = lvl.find(f"{W_NS}numFmt")
+            lvlText_el = lvl.find(f"{W_NS}lvlText")
+            start_el = lvl.find(f"{W_NS}start")
+
+            numFmt = numFmt_el.attrib.get(f"{W_NS}val", "decimal") if numFmt_el is not None else "decimal"
+            lvlText = lvlText_el.attrib.get(f"{W_NS}val", "%1.") if lvlText_el is not None else "%1."
+            try:
+                start = int(start_el.attrib.get(f"{W_NS}val", "1") or 1) if start_el is not None else 1
+            except Exception:
+                start = 1
+            levels[(ab_id, int(ilvl_str))] = {
+                "numFmt": numFmt,
+                "lvlText": lvlText,
+                "start": start
+            }
+
+    counters: Dict[Tuple[str, int], int] = {}
+
+    def format_num_val(val: int, fmt: str) -> str:
+        fmt = (fmt or "").lower()
+        if fmt == "decimal":
+            return str(val)
+        if fmt == "lowerletter":
+            return chr(ord('a') + max(0, val - 1) % 26)
+        if fmt == "upperletter":
+            return chr(ord('A') + max(0, val - 1) % 26)
+        if fmt == "lowerroman":
+            romans = [(10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+            res = ""
+            v = max(1, val)
+            for n, r in romans:
+                while v >= n:
+                    res += r
+                    v -= n
+            return res or "i"
+        if fmt == "upperroman":
+            romans = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+            res = ""
+            v = max(1, val)
+            for n, r in romans:
+                while v >= n:
+                    res += r
+                    v -= n
+            return res or "I"
+        if fmt == "decimalzero":
+            return f"{val:02d}"
+        if fmt in ("bullet", "none"):
+            return "•"
+        return str(val)
+
+    def get_numbering_prefix(numId_str: Optional[str], ilvl_str: Optional[str]) -> str:
+        if not numId_str or numId_str == "0":
+            return ""
+        ab_id = num_to_abstract.get(numId_str)
+        if not ab_id:
+            return ""
+        try:
+            ilvl = int(ilvl_str or 0)
+        except Exception:
+            ilvl = 0
+
+        lvl_info = levels.get((ab_id, ilvl))
+        if not lvl_info:
+            return ""
+
+        key = (numId_str, ilvl)
+        if key not in counters:
+            counters[key] = lvl_info["start"]
+        else:
+            counters[key] += 1
+
+        curr_val = counters[key]
+        fmt = lvl_info["numFmt"].lower()
+        tmpl = lvl_info["lvlText"]
+
+        if fmt in ("bullet", "none"):
+            return "• "
+
+        formatted = tmpl
+        for lvl_idx in range(9):
+            placeholder = f"%{lvl_idx + 1}"
+            if placeholder in formatted:
+                sub_val = counters.get((numId_str, lvl_idx), 1) if lvl_idx == ilvl else 1
+                sub_info = levels.get((ab_id, lvl_idx), lvl_info)
+                formatted = formatted.replace(placeholder, format_num_val(sub_val, sub_info["numFmt"]))
+
+        return (formatted + " ").strip() + " "
+
+    return get_numbering_prefix
+
+
+def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, float, float, float]]:
     """
     Extracts paragraphs, headings, font sizes, colors, shading, tables (with exact gridCol widths,
-    colspan, rowspan, cell background colors, and borders), and embedded images from a .docx file.
-    Returns (html_body, orientation).
+    colspan, rowspan, cell background colors, and borders), embedded images, auto-numbering,
+    margins, and line-spacing from a .docx file.
+    Returns (html_body, orientation, margins_pt).
     """
     parts: List[str] = []
     orientation = "portrait"
+    margins_pt: Tuple[float, float, float, float] = (54.0, 54.0, 54.0, 54.0)
     try:
         with zipfile.ZipFile(path, "r") as zf:
+            get_numbering_prefix = _parse_docx_numbering(zf)
             rels_map: Dict[str, str] = {}
             if "word/_rels/document.xml.rels" in zf.namelist():
                 try:
@@ -252,11 +424,34 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                 if orient_attr == "landscape" or w_attr > h_attr:
                     orientation = "landscape"
 
+            # Check section page margins (<w:pgMar>) in twips (1 pt = 20 twips)
+            for pgMar in body.iter(f"{W_NS}pgMar"):
+                try:
+                    t_pt = int(pgMar.attrib.get(f"{W_NS}top", "1080") or 1080) / 20.0
+                    r_pt = int(pgMar.attrib.get(f"{W_NS}right", "1080") or 1080) / 20.0
+                    b_pt = int(pgMar.attrib.get(f"{W_NS}bottom", "1080") or 1080) / 20.0
+                    l_pt = int(pgMar.attrib.get(f"{W_NS}left", "1080") or 1080) / 20.0
+                    margins_pt = (
+                        max(18.0, min(108.0, t_pt)),
+                        max(18.0, min(108.0, r_pt)),
+                        max(18.0, min(108.0, b_pt)),
+                        max(18.0, min(108.0, l_pt)),
+                    )
+                except Exception:
+                    pass
+
             def render_paragraph(p_el: ET.Element, in_table: bool = False) -> str:
                 align = ""
                 style_val = ""
                 is_list_item = False
+                num_prefix = ""
                 p_bg = None
+                p_styles: List[str] = []
+                if in_table:
+                    p_styles.append("margin:2px 0")
+                else:
+                    p_styles.append("margin-top:2px; margin-bottom:3px")
+
                 pPr = p_el.find(f"{W_NS}pPr")
                 if pPr is not None:
                     jc = pPr.find(f"{W_NS}jc")
@@ -264,14 +459,87 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                         val = jc.attrib.get(f"{W_NS}val", "")
                         if val in ("center", "right", "both", "distribute"):
                             align = "justify" if val in ("both", "distribute") else val
+                            p_styles.append(f"text-align:{align}")
                     pStyle = pPr.find(f"{W_NS}pStyle")
                     if pStyle is not None:
                         style_val = pStyle.attrib.get(f"{W_NS}val", "").lower()
-                    if pPr.find(f"{W_NS}numPr") is not None:
-                        is_list_item = True
+
+                    # Auto-numbering resolver
+                    numPr = pPr.find(f"{W_NS}numPr")
+                    if numPr is not None:
+                        ilvl_el = numPr.find(f"{W_NS}ilvl")
+                        numId_el = numPr.find(f"{W_NS}numId")
+                        ilvl_val = ilvl_el.attrib.get(f"{W_NS}val", "0") if ilvl_el is not None else "0"
+                        numId_val = numId_el.attrib.get(f"{W_NS}val", "0") if numId_el is not None else "0"
+                        num_prefix = get_numbering_prefix(numId_val, ilvl_val)
+                        if not num_prefix:
+                            is_list_item = True
+
+                    # Paragraph spacing & line-height
+                    spacing_el = pPr.find(f"{W_NS}spacing")
+                    if spacing_el is not None:
+                        line_val = spacing_el.attrib.get(f"{W_NS}line")
+                        line_rule = spacing_el.attrib.get(f"{W_NS}lineRule", "auto")
+                        if line_val:
+                            try:
+                                if line_rule == "auto":
+                                    lh = float(line_val) / 240.0
+                                    if 0.8 <= lh <= 2.8:
+                                        p_styles.append(f"line-height:{lh:.2f}")
+                                else:
+                                    lh_pt = float(line_val) / 20.0
+                                    if 8.0 <= lh_pt <= 48.0:
+                                        p_styles.append(f"line-height:{lh_pt:.1f}pt")
+                            except Exception:
+                                pass
+                        b_val = spacing_el.attrib.get(f"{W_NS}before")
+                        a_val = spacing_el.attrib.get(f"{W_NS}after")
+                        if b_val and not in_table:
+                            try:
+                                b_pt = max(0.0, min(72.0, float(b_val) / 20.0))
+                                p_styles.append(f"margin-top:{b_pt:.1f}pt")
+                            except Exception:
+                                pass
+                        if a_val and not in_table:
+                            try:
+                                a_pt = max(0.0, min(72.0, float(a_val) / 20.0))
+                                p_styles.append(f"margin-bottom:{a_pt:.1f}pt")
+                            except Exception:
+                                pass
+
+                    # Paragraph indentation
+                    ind_el = pPr.find(f"{W_NS}ind")
+                    if ind_el is not None:
+                        l_val = ind_el.attrib.get(f"{W_NS}left")
+                        if l_val:
+                            try:
+                                l_pt = max(0.0, min(240.0, float(l_val) / 20.0))
+                                p_styles.append(f"padding-left:{l_pt:.1f}pt")
+                            except Exception:
+                                pass
+                        f_val = ind_el.attrib.get(f"{W_NS}firstLine")
+                        h_val = ind_el.attrib.get(f"{W_NS}hanging")
+                        if f_val:
+                            try:
+                                f_pt = max(0.0, min(140.0, float(f_val) / 20.0))
+                                p_styles.append(f"text-indent:{f_pt:.1f}pt")
+                            except Exception:
+                                pass
+                        elif h_val:
+                            try:
+                                h_pt = max(0.0, min(140.0, float(h_val) / 20.0))
+                                p_styles.append(f"text-indent:-{h_pt:.1f}pt")
+                            except Exception:
+                                pass
+
+                    if pPr.find(f"{W_NS}pageBreakBefore") is not None:
+                        p_styles.append("page-break-before:always; break-before:page")
+
                     shd = pPr.find(f"{W_NS}shd")
                     if shd is not None:
                         p_bg = _clean_hex_color(shd.attrib.get(f"{W_NS}fill"))
+                        if p_bg:
+                            p_styles.append(f"background-color:{p_bg}; padding:2px 4px")
 
                 runs_html: List[str] = []
                 for child in p_el:
@@ -302,9 +570,12 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                             if sub.tag == f"{W_NS}t" and sub.text:
                                 texts.append(_html.escape(sub.text))
                             elif sub.tag == f"{W_NS}tab":
-                                texts.append("&nbsp;&nbsp;&nbsp;&nbsp;")
+                                texts.append('<span style="display:inline-block; min-width:32pt;">&nbsp;&nbsp;&nbsp;&nbsp;</span>')
                             elif sub.tag in (f"{W_NS}br", f"{W_NS}cr"):
-                                texts.append("<br>")
+                                if sub.attrib.get(f"{W_NS}type") == "page":
+                                    texts.append('<div style="page-break-before:always; break-before:page; height:0; line-height:0;"></div>')
+                                else:
+                                    texts.append("<br>")
 
                         for blip in r_node.iter(f"{A_NS}blip"):
                             embed_id = blip.attrib.get(f"{R_NS}embed", "")
@@ -351,15 +622,12 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                         runs_html.append(chunk)
 
                 inner = "".join(runs_html).strip()
-                if is_list_item and inner:
-                    inner = "• " + inner
+                if num_prefix and inner:
+                    inner = f'<span style="display:inline-block; min-width:20pt; font-weight:600;">{num_prefix}</span>&nbsp;' + inner
+                elif is_list_item and inner:
+                    inner = '<span style="display:inline-block; min-width:14pt; font-weight:bold;">•</span>&nbsp;' + inner
 
-                p_styles = [f"margin:{'2px 0' if in_table else '4px 0'}"]
-                if align:
-                    p_styles.append(f"text-align:{align}")
-                if p_bg:
-                    p_styles.append(f"background-color:{p_bg}; padding:2px 4px")
-                style_attr = f' style="{"; ".join(p_styles)};"'
+                style_attr = f' style="{"; ".join(p_styles)};"' if p_styles else ""
 
                 if not inner:
                     return "" if in_table else "<p style='margin:3px 0;'>&nbsp;</p>"
@@ -369,7 +637,8 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
                     return f"<h3{style_attr}>{inner}</h3>"
                 return f"<p{style_attr}>{inner}</p>"
 
-            avail_w_pt = 778.0 if orientation == "landscape" else 531.0
+            page_w_pt = 841.9 if orientation == "landscape" else 595.3
+            avail_w_pt = max(200.0, page_w_pt - margins_pt[1] - margins_pt[3])
 
             def render_table(tbl_el: ET.Element) -> str:
                 # 1. Parse table properties <w:tblPr> (width, alignment)
@@ -594,7 +863,7 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str]:
     except Exception as e:
         parts.append(f"<p>ডকুমেন্ট লোড হয়েছে ({_html.escape(str(e))})</p>")
 
-    return ("\n".join(parts) if parts else "<p>&nbsp;</p>"), orientation
+    return ("\n".join(parts) if parts else "<p>&nbsp;</p>"), orientation, margins_pt
 
 
 # ── PowerPoint (.pptx / .ppt) Coordinate-Accurate Slide Renderer ──
@@ -1160,7 +1429,12 @@ def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "", orientation: s
     return "\n".join(blocks) if blocks else "<p>&nbsp;</p>"
 
 
-def render_html_to_pdf(html_body: str, pdf_out_path: str, orientation: str = "portrait") -> int:
+def render_html_to_pdf(
+    html_body: str,
+    pdf_out_path: str,
+    orientation: str = "portrait",
+    margins: Tuple[float, float, float, float] = (36.0, 36.0, 36.0, 36.0)
+) -> int:
     """
     Renders rich HTML (Word paragraphs, headings, bordered tables, Excel grids, Bengali + English Unicode)
     into a clean multi-page A4 PDF using PyMuPDF Story. Returns total page count.
@@ -1168,13 +1442,22 @@ def render_html_to_pdf(html_body: str, pdf_out_path: str, orientation: str = "po
     if _fitz is None:
         raise RuntimeError("PyMuPDF (fitz) is required for Office document rendering")
 
+    top_m, right_m, bottom_m, left_m = margins
+
     full_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
+  @page {{
+    size: A4 {"landscape" if orientation == "landscape" else "portrait"};
+    margin: {top_m:.1f}pt {right_m:.1f}pt {bottom_m:.1f}pt {left_m:.1f}pt;
+  }}
   body {{
-    font-family: sans-serif;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Kalpurush", "SolaimanLipi", "Nirmala UI", Arial, sans-serif;
     font-size: 10.5pt;
     line-height: 1.42;
     color: #0f172a;
@@ -1190,7 +1473,6 @@ def render_html_to_pdf(html_body: str, pdf_out_path: str, orientation: str = "po
   }}
   table {{
     border-collapse: collapse;
-    width: 100%;
     margin-top: 6px;
     margin-bottom: 8px;
   }}
@@ -1213,8 +1495,7 @@ def render_html_to_pdf(html_body: str, pdf_out_path: str, orientation: str = "po
         mediabox = _fitz.Rect(0, 0, base_rect.height, base_rect.width)
     else:
         mediabox = base_rect
-    margin = 32
-    where = mediabox + (margin, margin, -margin, -margin)
+    where = _fitz.Rect(left_m, top_m, mediabox.width - right_m, mediabox.height - bottom_m)
 
     more = 1
     page_guard = 0
@@ -1297,8 +1578,9 @@ def convert_office_file_to_pdf_and_state(
     else:
         doc_kind = "word"
         sheets = None
+        docx_margins = (36.0, 36.0, 36.0, 36.0)
         if ext == "docx":
-            html_body, orientation = _parse_docx_to_html_and_meta(raw_path)
+            html_body, orientation, docx_margins = _parse_docx_to_html_and_meta(raw_path)
         else:
             html_body = _parse_legacy_text_or_doc(raw_path, ext)
             orientation = "portrait"
@@ -1306,7 +1588,7 @@ def convert_office_file_to_pdf_and_state(
         # IMPORTANT: Do NOT use _fitz.open(raw_path, filetype="docx") because MuPDF's built-in docx loader
         # strips <w:tbl> tables into plain text. Instead, use native Office/LibreOffice or our full-table Story renderer!
         if not native_ok:
-            pages = render_html_to_pdf(html_body, pdf_out_path, orientation=orientation)
+            pages = render_html_to_pdf(html_body, pdf_out_path, orientation=orientation, margins=docx_margins)
         else:
             with _fitz.open(pdf_out_path) as d:
                 pages = max(1, len(d))
@@ -1316,6 +1598,7 @@ def convert_office_file_to_pdf_and_state(
         "source_ext": ext,
         "title": orig_filename,
         "orientation": orientation,
+        "margins": list(docx_margins) if "docx_margins" in locals() and docx_margins else [36.0, 36.0, 36.0, 36.0],
         "html": html_body,
         "sheets": sheets,
     }
