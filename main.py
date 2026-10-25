@@ -159,6 +159,26 @@ class ConnectionManager:
         self.order_connections: Dict[str, List[WebSocket]] = {}
         # room_id -> list of transfer-room WebSockets
         self.room_connections: Dict[str, List[WebSocket]] = {}
+        # list of Super Admin WebSockets
+        self.superadmin_connections: List[WebSocket] = []
+
+    async def connect_superadmin(self, websocket: WebSocket):
+        await websocket.accept()
+        self.superadmin_connections.append(websocket)
+
+    def disconnect_superadmin(self, websocket: WebSocket):
+        if websocket in self.superadmin_connections:
+            self.superadmin_connections.remove(websocket)
+
+    async def notify_superadmin(self, message: dict):
+        dead = []
+        for ws in list(self.superadmin_connections):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect_superadmin(ws)
 
     async def connect_admin(self, shop_id: int, websocket: WebSocket):
         await websocket.accept()
@@ -273,10 +293,7 @@ async def home_page(request: Request):
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
-    # Public self-registration is disabled; only Super Admin can create shops
-    if is_superadmin(request):
-        return RedirectResponse(url="/superadmin", status_code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="admin_login.html", context={"mode": "register"})
 
 @app.post("/register")
 async def register_shop(
@@ -287,9 +304,62 @@ async def register_shop(
     password: str = Form(...),
     shop_code: str = Form(...)
 ):
-    if not is_superadmin(request):
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    return await superadmin_create_shop(request, shop_name, owner_name, phone, password, shop_code)
+    clean_code = re.sub(r"[^a-zA-Z0-9_-]", "", shop_code.strip().lower())
+    if not clean_code:
+        return templates.TemplateResponse(request=request, name="admin_login.html", context={
+            "mode": "register",
+            "error": "সঠিক শপ কোড দিন (শুধুমাত্র ইংরেজি অক্ষর ও সংখ্যা)।"
+        })
+
+    conn = db.get_db()
+    cursor = conn.cursor()
+    if cursor.execute("SELECT id FROM shops WHERE LOWER(shop_code) = ?", (clean_code,)).fetchone():
+        conn.close()
+        return templates.TemplateResponse(request=request, name="admin_login.html", context={
+            "mode": "register", 
+            "error": "এই শপ কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে। অন্য কোড দিন।"
+        })
+    
+    if cursor.execute("SELECT id FROM shops WHERE phone = ?", (phone.strip(),)).fetchone():
+        conn.close()
+        return templates.TemplateResponse(request=request, name="admin_login.html", context={
+            "mode": "register", 
+            "error": "এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত রয়েছে।"
+        })
+    
+    api_key = "qsp_" + secrets.token_hex(16)
+    now = datetime.now().isoformat()
+    # Create with is_active = 0 (Pending Super Admin Approval)
+    cursor.execute("""
+    INSERT INTO shops (
+        shop_code, name, owner_name, phone, password, api_key, 
+        bkash_number, nagad_number, allow_counter_cash,
+        rate_bw_single, rate_bw_double, rate_color_single, rate_color_double, rate_photo_4x6,
+        is_active, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 3.0, 5.0, 10.0, 18.0, 30.0, 0, ?)
+    """, (clean_code, shop_name.strip(), owner_name.strip(), phone.strip(), password.strip(), api_key, phone.strip(), phone.strip(), now))
+    conn.commit()
+    shop_id = cursor.lastrowid
+    conn.close()
+
+    # Notify Super Admin in real time
+    await manager.notify_superadmin({
+        "event": "NEW_SHOP_REGISTRATION",
+        "shop": {
+            "id": shop_id,
+            "name": shop_name.strip(),
+            "owner_name": owner_name.strip(),
+            "shop_code": clean_code,
+            "phone": phone.strip(),
+            "password": password.strip(),
+            "created_at": now,
+        }
+    })
+
+    return templates.TemplateResponse(request=request, name="admin_login.html", context={
+        "mode": "login",
+        "success": "✅ আপনার দোকান রেজিস্ট্রেশনের আবেদন সফলভাবে জমা হয়েছে! অ্যাডমিন (কর্তৃপক্ষ) Allow করলেই আপনি আপনার মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করতে পারবেন।"
+    })
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -310,16 +380,21 @@ async def login_shop(
         set_superadmin_session(response, request)
         return response
 
-    # 2. Check regular shopkeeper login
-    shop = db.authenticate_shop(clean_phone, clean_pass)
-    if not shop:
+    # 2. Check regular shopkeeper login (distinguish pending vs wrong password)
+    any_shop = db.get_shop_by_credentials_any_status(clean_phone, clean_pass)
+    if not any_shop:
         return templates.TemplateResponse(request=request, name="admin_login.html", context={
             "mode": "login", 
-            "error": "মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে (অথবা দোকানটি সাময়িকভাবে বন্ধ রয়েছে)।"
+            "error": "মোবাইল নম্বর অথবা পাসওয়ার্ড ভুল হয়েছে।"
+        })
+    if not any_shop.get("is_active"):
+        return templates.TemplateResponse(request=request, name="admin_login.html", context={
+            "mode": "login", 
+            "error": "⏳ আপনার দোকানের আবেদনটি এখনো অ্যাডমিনের অনুমোদনের (Allow) অপেক্ষায় রয়েছে। অ্যাডমিন অনুমোদন করলে লগইন করতে পারবেন।"
         })
     
     response = RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
-    set_session(response, request, shop["id"])
+    set_session(response, request, any_shop["id"])
     return response
 
 @app.get("/logout")
@@ -339,11 +414,15 @@ async def superadmin_dashboard(request: Request, msg: str = "", err: str = "", c
             "error": err
         })
     shops = db.get_all_shops_with_stats()
+    pending_shops = [s for s in shops if not s.get("is_active")]
+    active_shops = [s for s in shops if s.get("is_active")]
     sa_creds = db.get_superadmin_credentials()
     created_shop = db.get_shop_by_code(created.strip().lower()) if created else None
     return templates.TemplateResponse(request=request, name="superadmin.html", context={
         "authenticated": True,
         "shops": shops,
+        "pending_shops": pending_shops,
+        "active_shops": active_shops,
         "sa_creds": sa_creds,
         "base_url": base_url(request),
         "msg": msg,
@@ -448,6 +527,12 @@ async def superadmin_toggle_shop(shop_id: int, request: Request, is_active: int 
     if not is_superadmin(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     db.toggle_shop_active(shop_id, is_active)
+    shop = db.get_shop_by_id(shop_id)
+    if is_active and shop:
+        return RedirectResponse(
+            url=f"/superadmin?created={shop['shop_code']}&msg=দোকানটি+অনুমোদন+(Allow)+করা+হয়েছে!+এখন+দোকানদার+লগইন+করতে+পারবেন।",
+            status_code=status.HTTP_303_SEE_OTHER
+        )
     return RedirectResponse(url="/superadmin?msg=দোকানের+স্ট্যাটাস+পরিবর্তন+হয়েছে", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -2270,6 +2355,19 @@ async def websocket_order(websocket: WebSocket, order_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect_order(order_id, websocket)
+
+
+@app.websocket("/ws/superadmin")
+async def websocket_superadmin(websocket: WebSocket):
+    if unsign_value(websocket.cookies.get("superadmin_session")) != "superadmin":
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await manager.connect_superadmin(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_superadmin(websocket)
 
 if __name__ == "__main__":
     import uvicorn

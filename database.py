@@ -212,6 +212,15 @@ def authenticate_shop(phone: str, password: str) -> Optional[Dict[str, Any]]:
     conn.close()
     return dict(shop) if shop else None
 
+
+def get_shop_by_credentials_any_status(phone: str, password: str) -> Optional[Dict[str, Any]]:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM shops WHERE phone = ? AND password = ?", (phone, password))
+    shop = cursor.fetchone()
+    conn.close()
+    return dict(shop) if shop else None
+
 def update_shop_settings(shop_id: int, data: Dict[str, Any]):
     conn = get_db()
     cursor = conn.cursor()

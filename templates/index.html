@@ -27,7 +27,8 @@
         {% if shop %}
           <a href="/admin" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 transition">ড্যাশবোর্ড ({{ shop.name }})</a>
         {% else %}
-          <a href="/login" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 shadow-md shadow-pink-200 transition">শপ লগইন</a>
+          <a href="/login" class="px-4 py-2 text-gray-700 font-semibold hover:text-pink-600 transition">লগইন</a>
+          <a href="/register" class="px-4 py-2 bg-pink-600 text-white rounded-lg font-semibold hover:bg-pink-700 shadow-md shadow-pink-200 transition">দোকান রেজিস্টার করুন</a>
         {% endif %}
       </div>
     </div>
@@ -48,8 +49,8 @@
       </p>
 
       <div class="mt-10 flex flex-wrap justify-center gap-4">
-        <a href="/login" class="px-8 py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-lg font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition">
-          🔐 দোকানদার লগইন করুন
+        <a href="/register" class="px-8 py-3.5 bg-gradient-to-r from-pink-600 to-orange-500 text-white text-lg font-bold rounded-xl shadow-lg shadow-pink-500/25 hover:opacity-95 transition">
+          🚀 আপনার দোকানের জন্য রেজিস্টার করুন
         </a>
         <a href="/p/demo101" class="px-8 py-3.5 bg-white border-2 border-gray-200 text-gray-700 text-lg font-bold rounded-xl hover:border-pink-500 hover:text-pink-600 transition">
           📱 লাইভ ডেমো দেখুন
