@@ -1,9 +1,11 @@
-// Universal WebRTC Direct Peer-to-Peer High-Speed Transfer Engine (Tuned for Zero Bufferbloat)
+// Universal WebRTC Direct Peer-to-Peer High-Speed Transfer Engine
+// Architecture: Pipelined Double-Buffered Disk Streaming + 64KB SCTP Framing + Low-Latency Network Flow Control
 (function() {
-  const CHUNK_SIZE = 32 * 1024;             // 32 KB (optimal SCTP MTU without fragmentation)
-  const BUFFER_LOW_THRESHOLD = 64 * 1024;   // 64 KB
-  const BUFFER_MAX = 256 * 1024;            // 256 KB (prevents bufferbloat and RTT collapse)
-  const BATCH_FLUSH_BYTES = 8 * 1024 * 1024;// 8 MB Blob chunks for memory safety
+  const CHUNK_SIZE = 64 * 1024;             // 64 KB chunks
+  const BLOCK_SIZE = 2 * 1024 * 1024;       // 2 MB blocks (pipelined prefetch from disk)
+  const BUFFER_LOW_THRESHOLD = 256 * 1024;  // 256 KB
+  const BUFFER_MAX = 1024 * 1024;           // 1 MB network buffer ceiling (high throughput, zero bufferbloat)
+  const BATCH_FLUSH_BYTES = 16 * 1024 * 1024;// 16 MB Blob parts for receiver memory safety
 
   const ICE_SERVERS = [
     { urls: 'stun:stun.cloudflare.com:3478' },
@@ -81,7 +83,7 @@
           peerReady = true;
           updateP2PStatus('connected');
           checkConnectionQuality();
-          if (!statsInterval) statsInterval = setInterval(checkConnectionQuality, 3000);
+          if (!statsInterval) statsInterval = setInterval(checkConnectionQuality, 2500);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
           peerReady = false;
           if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
@@ -263,7 +265,7 @@
     const warningHtml = isOverInternet ? `
       <div class="bg-amber-50 border border-amber-300 p-3 rounded-xl text-amber-900 space-y-1">
         <p class="font-bold flex items-center gap-1"><span>⚠️</span> <span>আপনার ডিভাইস দুটি বর্তমানে ইন্টারনেটের মাধ্যমে যুক্ত রয়েছে!</span></p>
-        <p class="text-[11px]">একটি ডিভাইস হয়তো মোবাইল ডাটায় (SIM) আছে অথবা ওয়াইফাই রাউটার লোকাল কানেকশন ব্লক করছে। ইন্টারনেট দিয়ে ফাইল গেলে মোবাইল ডাটার স্পিডে (২৫০ KB/s - ১ MB/s) যাবে।</p>
+        <p class="text-[11px]">একটি ডিভাইস হয়তো মোবাইল ডাটায় (SIM) আছে অথবা ওয়াইফাই রাউটার লোকাল কানেকশন ব্লক করছে। ইন্টারনেট দিয়ে ফাইল গেলে মোবাইল ডাটার স্পিডে যাবে।</p>
       </div>
     ` : '';
 
@@ -291,7 +293,7 @@
     `;
   };
 
-  // High-Speed sender engine tuned for continuous streaming (Zero bufferbloat)
+  // High-Speed Pipelined Sender Engine
   window.sendP2PFile = function(file, onProgress) {
     if (!dc || dc.readyState !== 'open') return false;
 
@@ -307,101 +309,123 @@
       sender: myDevice
     }));
 
-    let offset = 0;
+    let fileOffset = 0;          // bytes read from disk so far
+    let sentOffset = 0;          // bytes queued to dc.send so far
+    let activeBlock = null;      // ArrayBuffer in RAM being sent
+    let activeBlockOffset = 0;   // offset within activeBlock
+    let nextBlock = null;        // pre-fetched next ArrayBuffer from disk
+    let isReadingNext = false;   // disk read in progress
+    let isFinished = false;
+    let isPausedForDisk = false;
+    let watchdogTimer = null;
     const startTime = Date.now();
     let lastProgressTime = 0;
-    let isReading = false;
-    let isFinished = false;
-    let watchdog = null;
 
     function report(force) {
       const now = Date.now();
-      if (!force && (now - lastProgressTime < 100) && offset < file.size) return;
+      if (!force && (now - lastProgressTime < 100) && sentOffset < file.size) return;
       lastProgressTime = now;
       const elapsed = (now - startTime) / 1000;
-      const speedBps = elapsed > 0.1 ? offset / elapsed : 0;
-      if (onProgress) onProgress(offset, file.size, speedBps);
+      const speedBps = elapsed > 0.1 ? sentOffset / elapsed : 0;
+      if (onProgress) onProgress(sentOffset, file.size, speedBps);
     }
 
-    function schedulePump() {
-      if (watchdog) return;
-      watchdog = setTimeout(() => {
-        watchdog = null;
+    function prefetchNextBlock() {
+      if (isReadingNext || nextBlock || fileOffset >= file.size) return;
+      isReadingNext = true;
+      const start = fileOffset;
+      const end = Math.min(file.size, fileOffset + BLOCK_SIZE);
+      fileOffset = end;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        isReadingNext = false;
+        nextBlock = e.target.result;
+        if (isPausedForDisk) {
+          isPausedForDisk = false;
+          pump();
+        }
+      };
+      reader.onerror = () => {
+        isReadingNext = false;
+        console.error('P2P FileReader error on slice');
+      };
+      reader.readAsArrayBuffer(file.slice(start, end));
+    }
+
+    function scheduleWatchdog() {
+      if (watchdogTimer) return;
+      watchdogTimer = setTimeout(() => {
+        watchdogTimer = null;
         pump();
-      }, 15);
+      }, 10);
     }
 
     function pump() {
-      if (isFinished || isReading || !dc || dc.readyState !== 'open') return;
+      if (isFinished || !dc || dc.readyState !== 'open') return;
 
-      if (offset >= file.size) {
-        if (dc.bufferedAmount === 0) {
-          isFinished = true;
-          report(true);
-          if (onProgress) onProgress(file.size, file.size, 0);
-          return;
-        } else {
-          schedulePump();
-          return;
-        }
-      }
-
-      if (dc.bufferedAmount > BUFFER_MAX) {
-        schedulePump();
-        return;
-      }
-
-      // Read a 64 KB slice (2 chunks of 32 KB)
-      const sliceSize = Math.min(64 * 1024, file.size - offset);
-      isReading = true;
-      const reader = new FileReader();
-      const slice = file.slice(offset, offset + sliceSize);
-
-      reader.onload = (e) => {
-        isReading = false;
-        if (!dc || dc.readyState !== 'open') return;
-
-        const buf = e.target.result;
-        let bufOffset = 0;
-        while (bufOffset < buf.byteLength) {
-          const chunkEnd = Math.min(buf.byteLength, bufOffset + CHUNK_SIZE);
-          const chunk = buf.slice(bufOffset, chunkEnd);
-          try {
-            dc.send(chunk);
-          } catch (err) {
-            console.warn('dc.send error:', err);
-            break;
+      while (true) {
+        // Need to load or switch to next block from memory
+        if (!activeBlock || activeBlockOffset >= activeBlock.byteLength) {
+          if (nextBlock) {
+            activeBlock = nextBlock;
+            activeBlockOffset = 0;
+            nextBlock = null;
+            prefetchNextBlock(); // Start prefetching the following block in the background
+          } else if (sentOffset >= file.size) {
+            // All file bytes queued
+            if (dc.bufferedAmount === 0) {
+              isFinished = true;
+              report(true);
+              if (onProgress) onProgress(file.size, file.size, 0);
+              return;
+            } else {
+              scheduleWatchdog();
+              return;
+            }
+          } else {
+            // Waiting for disk prefetch
+            isPausedForDisk = true;
+            prefetchNextBlock();
+            return;
           }
-          bufOffset += chunk.byteLength;
-          offset += chunk.byteLength;
         }
 
+        // Check if network socket buffer is full
+        if (dc.bufferedAmount >= BUFFER_MAX) {
+          scheduleWatchdog();
+          return;
+        }
+
+        // Send next chunk from RAM
+        const chunkEnd = Math.min(activeBlock.byteLength, activeBlockOffset + CHUNK_SIZE);
+        const chunk = activeBlock.slice(activeBlockOffset, chunkEnd);
+        try {
+          dc.send(chunk);
+        } catch (err) {
+          console.warn('dc.send full:', err);
+          scheduleWatchdog();
+          return;
+        }
+
+        const len = chunk.byteLength;
+        activeBlockOffset += len;
+        sentOffset += len;
         report(false);
-
-        if (dc.bufferedAmount < BUFFER_MAX && offset < file.size) {
-          pump();
-        } else {
-          schedulePump();
-        }
-      };
-
-      reader.onerror = () => {
-        isReading = false;
-        console.error('File read error');
-      };
-
-      reader.readAsArrayBuffer(slice);
+      }
     }
 
     dc.onbufferedamountlow = () => {
       pump();
     };
 
+    // Preload block 0 and block 1, then start pump
+    prefetchNextBlock();
     pump();
     return true;
   };
 
-  // High-Speed receiver engine with Blob chunk aggregation (prevents RAM exhaust on 1GB+ files)
+  // High-Speed receiver engine with 16MB Blob part aggregation (memory-safe for 1GB+)
   function handleChannelMessage(data) {
     if (typeof data === 'string') {
       try {
@@ -422,7 +446,7 @@
       currentBatchBytes += data.byteLength;
       receivedBytes += data.byteLength;
 
-      // Offload 8MB batches into Blob parts to keep JS heap small
+      // Offload 16MB batches into Blob parts to keep JS heap small
       if (currentBatchBytes >= BATCH_FLUSH_BYTES) {
         receivedBlobs.push(new Blob(currentBufferBatch));
         currentBufferBatch = [];
