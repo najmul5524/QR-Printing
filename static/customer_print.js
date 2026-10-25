@@ -2588,6 +2588,7 @@
         doc_kind: data.doc_kind || 'word',
         title: data.title || uploadedFile.original_filename || 'Document',
         orientation: data.orientation || (checked('orientation') || 'portrait'),
+        margins: data.margins || [36.0, 36.0, 36.0, 36.0],
         html: data.html || '<p>&nbsp;</p>',
         sheets: Array.isArray(data.sheets) && data.sheets.length > 0 ? data.sheets : [{ name: 'Sheet 1', rows: [['', '', '']] }],
         activeSheetIdx: 0
@@ -2620,6 +2621,7 @@
         renderExcelGridInModal();
       } else if (wordArea) {
         wordArea.innerHTML = officeEditorState.html;
+        setupTableInteractiveResizer();
       }
     } catch (e) {
       alert('ডকুমেন্ট লোড ব্যর্থ হয়েছে: ' + e);
@@ -2632,19 +2634,282 @@
     if (modal) modal.classList.add('hidden');
   };
 
-  window.execWordCmd = function(cmd) {
+  window.execWordCmd = function(cmd, val = null) {
     const area = $('wordEditorArea');
     if (area) area.focus();
-    document.execCommand(cmd, false, null);
+    document.execCommand(cmd, false, val);
   };
+
+  window.applyWordFormatBlock = function(tag) {
+    const area = $('wordEditorArea');
+    if (area) area.focus();
+    document.execCommand('formatBlock', false, tag);
+  };
+
+  window.applyWordFontSize = function(size) {
+    const area = $('wordEditorArea');
+    if (area) area.focus();
+    document.execCommand('fontSize', false, size);
+  };
+
+  function getCurrentTableCell() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    let node = sel.getRangeAt(0).commonAncestorContainer;
+    const area = $('wordEditorArea');
+    while (node && node !== area) {
+      if (node.nodeName === 'TD' || node.nodeName === 'TH') return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function redistributeColgroup(tbl) {
+    const cg = tbl.querySelector('colgroup');
+    if (!cg) return;
+    const cols = Array.from(cg.children);
+    if (!cols.length) return;
+    const pct = (100 / cols.length).toFixed(2);
+    cols.forEach((c, i) => {
+      c.style.width = (i === cols.length - 1 ? (100 - pct * (cols.length - 1)).toFixed(2) : pct) + '%';
+    });
+  }
 
   window.insertWordTable = function() {
     const area = $('wordEditorArea');
     if (!area) return;
     area.focus();
-    const tblHtml = '<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse; width:100%; margin:8px 0;"><tr><td style="border:1px solid #475569; padding:5px;">কলাম ১</td><td style="border:1px solid #475569; padding:5px;">কলাম ২</td><td style="border:1px solid #475569; padding:5px;">কলাম ৩</td></tr><tr><td style="border:1px solid #475569; padding:5px;">&nbsp;</td><td style="border:1px solid #475569; padding:5px;">&nbsp;</td><td style="border:1px solid #475569; padding:5px;">&nbsp;</td></tr></table><p>&nbsp;</p>';
+    const tblHtml = '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse; width:100%; table-layout:fixed; margin:8px 0;"><colgroup><col style="width:33.33%;"><col style="width:33.33%;"><col style="width:33.34%;"></colgroup><tr><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;"><b>কলাম ১</b></td><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;"><b>কলাম ২</b></td><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;"><b>কলাম ৩</b></td></tr><tr><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;">&nbsp;</td><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;">&nbsp;</td><td style="border:1px solid #1e293b; padding:2.5pt 5.4pt;">&nbsp;</td></tr></table><p>&nbsp;</p>';
     document.execCommand('insertHTML', false, tblHtml);
+    setupTableInteractiveResizer();
   };
+
+  window.addTableRowAbove = function() {
+    const td = getCurrentTableCell();
+    if (!td) {
+      alert('যে রো-এর উপরে নতুন রো যোগ করতে চান সেই ঘরে কার্সর রাখুন।');
+      return;
+    }
+    const tr = td.parentElement;
+    const newTr = tr.cloneNode(true);
+    for (let i = 0; i < newTr.children.length; i++) {
+      newTr.children[i].innerHTML = '&nbsp;';
+    }
+    tr.parentElement.insertBefore(newTr, tr);
+  };
+
+  window.addTableRowBelow = function() {
+    const td = getCurrentTableCell();
+    if (!td) {
+      alert('যে রো-এর নিচে নতুন রো যোগ করতে চান সেই ঘরে কার্সর রাখুন।');
+      return;
+    }
+    const tr = td.parentElement;
+    const newTr = tr.cloneNode(true);
+    for (let i = 0; i < newTr.children.length; i++) {
+      newTr.children[i].innerHTML = '&nbsp;';
+    }
+    if (tr.nextSibling) {
+      tr.parentElement.insertBefore(newTr, tr.nextSibling);
+    } else {
+      tr.parentElement.appendChild(newTr);
+    }
+  };
+
+  window.deleteTableRow = function() {
+    const td = getCurrentTableCell();
+    if (!td) return;
+    const tr = td.parentElement;
+    const tbody = tr.parentElement;
+    if (tbody && tbody.children.length > 1) {
+      tr.remove();
+    } else {
+      alert('টেবিলে অন্তত একটি রো থাকতে হবে।');
+    }
+  };
+
+  window.addTableColLeft = function() {
+    const td = getCurrentTableCell();
+    if (!td) {
+      alert('যে কলামের বামে নতুন কলাম যোগ করতে চান সেই ঘরে কার্সর রাখুন।');
+      return;
+    }
+    const colIdx = td.cellIndex;
+    const tbl = td.closest('table');
+    if (!tbl) return;
+    const rows = tbl.querySelectorAll('tr');
+    rows.forEach(r => {
+      const newCell = document.createElement(r.children[colIdx] ? r.children[colIdx].nodeName : 'td');
+      newCell.style.border = '1px solid #1e293b';
+      newCell.style.padding = '2.5pt 5.4pt';
+      newCell.innerHTML = '&nbsp;';
+      if (r.children[colIdx]) {
+        r.insertBefore(newCell, r.children[colIdx]);
+      } else {
+        r.appendChild(newCell);
+      }
+    });
+    const cg = tbl.querySelector('colgroup');
+    if (cg) {
+      const col = document.createElement('col');
+      if (cg.children[colIdx]) cg.insertBefore(col, cg.children[colIdx]);
+      else cg.appendChild(col);
+      redistributeColgroup(tbl);
+    }
+  };
+
+  window.addTableColRight = function() {
+    const td = getCurrentTableCell();
+    if (!td) {
+      alert('যে কলামের ডানে নতুন কলাম যোগ করতে চান সেই ঘরে কার্সর রাখুন।');
+      return;
+    }
+    const colIdx = td.cellIndex;
+    const tbl = td.closest('table');
+    if (!tbl) return;
+    const rows = tbl.querySelectorAll('tr');
+    rows.forEach(r => {
+      const newCell = document.createElement(r.children[colIdx] ? r.children[colIdx].nodeName : 'td');
+      newCell.style.border = '1px solid #1e293b';
+      newCell.style.padding = '2.5pt 5.4pt';
+      newCell.innerHTML = '&nbsp;';
+      if (r.children[colIdx + 1]) {
+        r.insertBefore(newCell, r.children[colIdx + 1]);
+      } else {
+        r.appendChild(newCell);
+      }
+    });
+    const cg = tbl.querySelector('colgroup');
+    if (cg) {
+      const col = document.createElement('col');
+      if (cg.children[colIdx + 1]) cg.insertBefore(col, cg.children[colIdx + 1]);
+      else cg.appendChild(col);
+      redistributeColgroup(tbl);
+    }
+  };
+
+  window.deleteTableCol = function() {
+    const td = getCurrentTableCell();
+    if (!td) return;
+    const colIdx = td.cellIndex;
+    const tbl = td.closest('table');
+    if (!tbl) return;
+    const rows = tbl.querySelectorAll('tr');
+    if (rows[0] && rows[0].children.length <= 1) {
+      alert('টেবিলে অন্তত একটি কলাম থাকতে হবে।');
+      return;
+    }
+    rows.forEach(r => {
+      if (r.children[colIdx]) r.children[colIdx].remove();
+    });
+    const cg = tbl.querySelector('colgroup');
+    if (cg && cg.children[colIdx]) {
+      cg.children[colIdx].remove();
+      redistributeColgroup(tbl);
+    }
+  };
+
+  function setupTableInteractiveResizer() {
+    const area = $('wordEditorArea');
+    if (!area || area._resizerAttached) return;
+    area._resizerAttached = true;
+
+    let resizingType = null;
+    let activeCell = null;
+    let activeRow = null;
+    let startX = 0, startY = 0;
+    let startWidth = 0, startHeight = 0;
+    let activeTable = null;
+    let activeColIndex = 0;
+    let nextCell = null, startNextWidth = 0;
+
+    area.addEventListener('mousemove', function(e) {
+      if (resizingType) return;
+      const td = e.target.closest('td, th');
+      if (!td || !area.contains(td)) {
+        area.style.cursor = '';
+        return;
+      }
+      const rect = td.getBoundingClientRect();
+      const nearRight = (rect.right - e.clientX) <= 7 && (rect.right - e.clientX) >= 0;
+      const nearBottom = (rect.bottom - e.clientY) <= 7 && (rect.bottom - e.clientY) >= 0;
+
+      if (nearRight) {
+        td.style.cursor = 'col-resize';
+      } else if (nearBottom) {
+        td.style.cursor = 'row-resize';
+      } else {
+        td.style.cursor = '';
+      }
+    });
+
+    area.addEventListener('mousedown', function(e) {
+      const td = e.target.closest('td, th');
+      if (!td || !area.contains(td)) return;
+      const rect = td.getBoundingClientRect();
+      const nearRight = (rect.right - e.clientX) <= 7 && (rect.right - e.clientX) >= 0;
+      const nearBottom = (rect.bottom - e.clientY) <= 7 && (rect.bottom - e.clientY) >= 0;
+
+      if (nearRight) {
+        e.preventDefault();
+        resizingType = 'col';
+        activeCell = td;
+        activeTable = td.closest('table');
+        activeColIndex = td.cellIndex;
+        startX = e.clientX;
+        startWidth = td.offsetWidth;
+        nextCell = td.nextElementSibling;
+        startNextWidth = nextCell ? nextCell.offsetWidth : 0;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      } else if (nearBottom) {
+        e.preventDefault();
+        resizingType = 'row';
+        activeRow = td.parentElement;
+        startY = e.clientY;
+        startHeight = activeRow.offsetHeight;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+      }
+    });
+
+    window.addEventListener('mousemove', function(e) {
+      if (!resizingType) return;
+      if (resizingType === 'col' && activeCell && activeTable) {
+        const diffX = e.clientX - startX;
+        const newW = Math.max(25, startWidth + diffX);
+        const tblWidth = activeTable.offsetWidth || 500;
+        const cg = activeTable.querySelector('colgroup');
+        if (cg && cg.children[activeColIndex]) {
+          const colEl = cg.children[activeColIndex];
+          const pct = Math.max(4, Math.min(85, (newW / tblWidth) * 100));
+          colEl.style.width = pct.toFixed(2) + '%';
+          if (nextCell && cg.children[activeColIndex + 1]) {
+            const nextNewW = Math.max(25, startNextWidth - diffX);
+            const nextPct = Math.max(4, Math.min(85, (nextNewW / tblWidth) * 100));
+            cg.children[activeColIndex + 1].style.width = nextPct.toFixed(2) + '%';
+          }
+        } else {
+          activeCell.style.width = newW + 'px';
+        }
+      } else if (resizingType === 'row' && activeRow) {
+        const diffY = e.clientY - startY;
+        const newH = Math.max(18, startHeight + diffY);
+        activeRow.style.height = newH + 'px';
+      }
+    });
+
+    window.addEventListener('mouseup', function() {
+      if (resizingType) {
+        resizingType = null;
+        activeCell = null;
+        activeRow = null;
+        activeTable = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
+  }
 
   window.switchExcelSheet = function(idxStr) {
     syncActiveExcelDomToState();
@@ -2702,6 +2967,7 @@
           doc_kind: officeEditorState.doc_kind,
           title: officeEditorState.title,
           orientation: chosenOrient,
+          margins: officeEditorState.margins || [36.0, 36.0, 36.0, 36.0],
           html: officeEditorState.html,
           sheets: officeEditorState.sheets
         })

@@ -979,23 +979,90 @@
 
     <!-- Interactive Word / Excel / Document Editor Modal -->
     <div id="officeEditModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
-      <div class="bg-white max-w-2xl w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border max-h-[92vh]">
-        <div class="px-4 py-3 bg-gradient-to-r from-amber-600 to-orange-600 text-white flex items-center justify-between shrink-0">
+      <div class="bg-white max-w-5xl w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border max-h-[94vh]">
+        <div class="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-orange-600 text-white flex items-center justify-between shrink-0">
           <h3 class="font-bold text-sm flex items-center gap-2">
             <span>✏️</span> <span id="officeEditModalTitle">Word / Excel ডকুমেন্ট এডিটর</span>
           </h3>
           <button type="button" onclick="closeOfficeEditModal()" class="text-white hover:opacity-80 text-2xl leading-none">&times;</button>
         </div>
 
-        <div class="p-3 bg-amber-50/70 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-          <!-- Word Formatting Toolbar -->
-          <div id="wordEditorToolbar" class="flex flex-wrap items-center gap-1">
-            <button type="button" onclick="execWordCmd('bold')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-extrabold" title="Bold">B</button>
-            <button type="button" onclick="execWordCmd('italic')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg italic font-serif" title="Italic">I</button>
-            <button type="button" onclick="execWordCmd('underline')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg underline" title="Underline">U</button>
-            <button type="button" onclick="execWordCmd('justifyLeft')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold" title="Align Left">⬅ বামে</button>
-            <button type="button" onclick="execWordCmd('justifyCenter')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold" title="Align Center">↔ মাঝে</button>
-            <button type="button" onclick="insertWordTable()" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold">➕ টেবিল</button>
+        <!-- Main Multi-Tier Advanced Toolbar -->
+        <div class="p-2.5 bg-amber-50/80 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 select-none">
+          <!-- Word Full Advanced Formatting Toolbar -->
+          <div id="wordEditorToolbar" class="flex flex-wrap items-center gap-1.5">
+            <!-- Undo / Redo Group -->
+            <div class="flex items-center border border-amber-300 rounded-lg overflow-hidden bg-white shadow-xs">
+              <button type="button" onclick="execWordCmd('undo')" class="px-2 py-1 hover:bg-amber-100 font-bold border-r border-amber-200" title="পূর্বাবস্থায় ফিরুন (Undo / Ctrl+Z)">↶ আনডু</button>
+              <button type="button" onclick="execWordCmd('redo')" class="px-2 py-1 hover:bg-amber-100 font-bold" title="পুনরায় করুন (Redo / Ctrl+Y)">↷ রিডু</button>
+            </div>
+
+            <div class="h-5 w-px bg-amber-300 mx-0.5"></div>
+
+            <!-- Typography & Size -->
+            <select onchange="applyWordFormatBlock(this.value)" class="px-2 py-1 bg-white border border-gray-300 rounded-lg font-bold text-gray-700 text-xs">
+              <option value="p">সাধারণ লেখা</option>
+              <option value="h1">বড় হেডিং (H1)</option>
+              <option value="h2">মাঝারি হেডিং (H2)</option>
+              <option value="h3">ছোট হেডিং (H3)</option>
+            </select>
+            <select onchange="applyWordFontSize(this.value)" class="px-2 py-1 bg-white border border-gray-300 rounded-lg font-bold text-gray-700 text-xs">
+              <option value="1">10pt</option>
+              <option value="2">11pt</option>
+              <option value="3" selected>12pt</option>
+              <option value="4">14pt</option>
+              <option value="5">18pt</option>
+              <option value="6">24pt</option>
+            </select>
+
+            <!-- Text Formatting -->
+            <div class="flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white">
+              <button type="button" onclick="execWordCmd('bold')" class="px-2 py-1 hover:bg-gray-100 font-extrabold border-r" title="Bold (Ctrl+B)">B</button>
+              <button type="button" onclick="execWordCmd('italic')" class="px-2 py-1 hover:bg-gray-100 italic font-serif border-r" title="Italic (Ctrl+I)">I</button>
+              <button type="button" onclick="execWordCmd('underline')" class="px-2 py-1 hover:bg-gray-100 underline border-r" title="Underline (Ctrl+U)">U</button>
+              <button type="button" onclick="execWordCmd('strikeThrough')" class="px-2 py-1 hover:bg-gray-100 line-through" title="Strikethrough">S</button>
+            </div>
+
+            <!-- Color controls -->
+            <label class="flex items-center gap-1 px-1.5 py-1 bg-white border border-gray-300 rounded-lg cursor-pointer" title="লেখার রং">
+              <span class="font-bold text-[10px] text-gray-700">🎨 রং:</span>
+              <input type="color" value="#000000" onchange="execWordCmd('foreColor', this.value)" class="w-4 h-4 border-0 p-0 bg-transparent cursor-pointer">
+            </label>
+            <label class="flex items-center gap-1 px-1.5 py-1 bg-white border border-gray-300 rounded-lg cursor-pointer" title="হাইলাইট রং">
+              <span class="font-bold text-[10px] text-gray-700">🖍️ ব্যাকগ্রাউন্ড:</span>
+              <input type="color" value="#ffff00" onchange="execWordCmd('hiliteColor', this.value)" class="w-4 h-4 border-0 p-0 bg-transparent cursor-pointer">
+            </label>
+
+            <div class="h-5 w-px bg-amber-300 mx-0.5"></div>
+
+            <!-- Alignment -->
+            <div class="flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white">
+              <button type="button" onclick="execWordCmd('justifyLeft')" class="px-1.5 py-1 hover:bg-gray-100 font-bold border-r" title="বামে">⬅</button>
+              <button type="button" onclick="execWordCmd('justifyCenter')" class="px-1.5 py-1 hover:bg-gray-100 font-bold border-r" title="মাঝে">↔</button>
+              <button type="button" onclick="execWordCmd('justifyRight')" class="px-1.5 py-1 hover:bg-gray-100 font-bold border-r" title="ডানে">➡</button>
+              <button type="button" onclick="execWordCmd('justifyFull')" class="px-1.5 py-1 hover:bg-gray-100 font-bold" title="জাস্টিফাই">≡</button>
+            </div>
+
+            <!-- Lists -->
+            <div class="flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white">
+              <button type="button" onclick="execWordCmd('insertUnorderedList')" class="px-2 py-1 hover:bg-gray-100 font-bold border-r" title="বুলেট লিস্ট">• লিস্ট</button>
+              <button type="button" onclick="execWordCmd('insertOrderedList')" class="px-2 py-1 hover:bg-gray-100 font-bold" title="নম্বর লিস্ট">1. লিস্ট</button>
+            </div>
+
+            <div class="h-5 w-px bg-amber-300 mx-0.5"></div>
+
+            <!-- Table Actions Group -->
+            <div class="flex items-center gap-1 bg-amber-100/70 p-0.5 rounded-lg border border-amber-300">
+              <button type="button" onclick="insertWordTable()" class="px-2 py-1 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded font-bold" title="নতুন টেবিল ইনসার্ট করুন">➕ টেবিল</button>
+              <button type="button" onclick="addTableRowAbove()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="সেলের উপরে নতুন সারি যোগ করুন">⬆ সারি</button>
+              <button type="button" onclick="addTableRowBelow()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="সেলের নিচে নতুন সারি যোগ করুন">⬇ সারি</button>
+              <button type="button" onclick="addTableColLeft()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="বামে নতুন কলাম যোগ করুন">⬅ কলাম</button>
+              <button type="button" onclick="addTableColRight()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="ডানে নতুন কলাম যোগ করুন">➡ কলাম</button>
+              <button type="button" onclick="deleteTableRow()" class="px-1.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded font-bold" title="কারেন্ট সারি মুছুন">🗑️ সারি</button>
+              <button type="button" onclick="deleteTableCol()" class="px-1.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded font-bold" title="কারেন্ট কলাম মুছুন">🗑️ কলাম</button>
+            </div>
+
+            <button type="button" onclick="execWordCmd('removeFormat')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg text-gray-600 font-bold" title="ফরম্যাটিং মুছে সাধারণ টেক্সট করুন">🧹 ফরম্যাট ক্লিয়ার</button>
           </div>
 
           <!-- Excel Grid Toolbar -->
@@ -1015,20 +1082,22 @@
           </div>
         </div>
 
-        <div class="p-3 overflow-y-auto flex-1 bg-slate-100">
-          <!-- Word Rich-Text Contenteditable Area -->
-          <div id="wordEditorArea" contenteditable="true" class="bg-white border border-gray-300 rounded-xl shadow-inner p-4 min-h-[340px] max-h-[56vh] overflow-y-auto text-sm text-gray-900 focus:outline-none focus:border-amber-500 leading-relaxed"></div>
+        <div class="p-3 overflow-y-auto flex-1 bg-slate-100 flex flex-col items-center">
+          <!-- Word Rich-Text Contenteditable Area Styled like real A4 Page -->
+          <div id="wordEditorArea" contenteditable="true" class="bg-white border border-gray-300 rounded shadow-md p-6 sm:p-10 w-full min-h-[500px] max-h-[64vh] overflow-y-auto text-sm text-gray-900 focus:outline-none focus:border-amber-500 leading-normal" style="font-family:'Calibri', 'Segoe UI', Arial, sans-serif;"></div>
 
           <!-- Excel Interactive Spreadsheet Grid Area -->
-          <div id="excelEditorArea" class="hidden bg-white border border-gray-300 rounded-xl shadow-inner p-2 min-h-[340px] max-h-[56vh] overflow-auto">
+          <div id="excelEditorArea" class="hidden bg-white border border-gray-300 rounded-xl shadow-inner p-2 w-full min-h-[400px] max-h-[64vh] overflow-auto">
             <table id="excelGridTable" class="w-full border-collapse text-xs"></table>
           </div>
         </div>
 
-        <div class="p-3 bg-gray-50 border-t flex items-center justify-between gap-2 shrink-0">
-          <span class="text-[11px] text-gray-500 font-medium">💡 যেকোনো লেখা বা ঘর ক্লিক করে পরিবর্তন করুন এবং সেভ চাপুন</span>
-          <div class="flex items-center gap-2">
-            <button type="button" onclick="closeOfficeEditModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বাতিল</button>
+        <div class="p-3 bg-gray-50 border-t flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div class="flex items-center gap-3 text-xs text-gray-600 font-medium">
+            <span>💡 <b>টেবিল রিসাইজ:</b> যেকোনো কলাম বা সারির বর্ডারে মাউস নিয়ে টেনে (Drag) ছোট-বড় করুন।</span>
+          </div>
+          <div class="flex items-center gap-2 ml-auto">
+            <button type="button" onclick="closeOfficeEditModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100">বাতিল</button>
             <button type="button" id="btnSaveOfficeEdit" onclick="saveOfficeEditedDocument()" class="px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
               <span>✓</span> <span>পরিবর্তন সেভ করুন</span>
             </button>
@@ -1053,6 +1122,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102409"></script>
+  <script src="/static/customer_print.js?v=2026102512"></script>
 </body>
 </html>

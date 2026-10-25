@@ -103,7 +103,7 @@ def find_sumatra(config: dict):
     return None
 
 def print_with_sumatra(sumatra: str, file_path: str, copies: int, printer_name: str = "", orientation: str = "portrait") -> bool:
-    settings_items = ["noscale", f"{max(1, copies)}x"]
+    settings_items = ["shrink", f"{max(1, copies)}x"]
     if orientation == "landscape":
         settings_items.append("landscape")
     elif orientation == "portrait":

@@ -907,9 +907,9 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                             f"vertical-align:{v_align}",
                             "box-sizing:border-box",
                             "line-height:1.15",
+                            "word-break:break-word",
+                            "overflow-wrap:break-word",
                         ]
-                        if w_pt_style:
-                            c_styles.append(w_pt_style)
                         if row_h_pt:
                             c_styles.append(f"height:{row_h_pt:.1f}pt")
                         if cell_bg:
@@ -932,7 +932,11 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                 colgroup_html = ""
                 if final_col_pts:
-                    colgroup_html = "<colgroup>" + "".join(f'<col style="width:{w:.1f}pt;">' for w in final_col_pts) + "</colgroup>"
+                    total_pts = sum(final_col_pts) or 1.0
+                    col_pcts = [round((w / total_pts) * 100.0, 2) for w in final_col_pts]
+                    diff_pct = 100.0 - sum(col_pcts)
+                    col_pcts[-1] = round(col_pcts[-1] + diff_pct, 2)
+                    colgroup_html = "<colgroup>" + "".join(f'<col style="width:{pct:.2f}%;">' for pct in col_pcts) + "</colgroup>"
 
                 margin_css = "margin:6px 0;"
                 if tbl_align == "center":
@@ -940,7 +944,7 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                 elif tbl_align == "right":
                     margin_css = "margin:6px 0 6px auto;"
 
-                table_css = f"border-collapse:collapse; width:{actual_tbl_w_pt:.1f}pt; max-width:100%; {margin_css} font-size:10pt;"
+                table_css = f"border-collapse:collapse; width:100%; table-layout:fixed; {margin_css} font-size:10pt;"
                 return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{colgroup_html}{"".join(t_rows)}</table>'
             for elem in body:
                 if elem.tag == f"{W_NS}p":
@@ -1546,6 +1550,8 @@ def render_html_to_pdf(
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    word-break: break-word;
+    overflow-wrap: break-word;
     font-family: "Calibri", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Kalpurush", "SolaimanLipi", "Nirmala UI", Arial, sans-serif;
     font-size: 11pt;
     line-height: 1.18;
