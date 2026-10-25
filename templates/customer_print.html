@@ -1052,7 +1052,7 @@
             <div class="h-5 w-px bg-amber-300 mx-0.5"></div>
 
             <!-- Table Actions Group -->
-            <div class="flex items-center gap-1 bg-amber-100/70 p-0.5 rounded-lg border border-amber-300">
+            <div class="flex flex-wrap items-center gap-1 bg-amber-100/70 p-0.5 rounded-lg border border-amber-300">
               <button type="button" onclick="insertWordTable()" class="px-2 py-1 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded font-bold" title="নতুন টেবিল ইনসার্ট করুন">➕ টেবিল</button>
               <button type="button" onclick="addTableRowAbove()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="সেলের উপরে নতুন সারি যোগ করুন">⬆ সারি</button>
               <button type="button" onclick="addTableRowBelow()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="সেলের নিচে নতুন সারি যোগ করুন">⬇ সারি</button>
@@ -1060,6 +1060,20 @@
               <button type="button" onclick="addTableColRight()" class="px-1.5 py-1 bg-white hover:bg-amber-50 border border-gray-300 rounded font-bold" title="ডানে নতুন কলাম যোগ করুন">➡ কলাম</button>
               <button type="button" onclick="deleteTableRow()" class="px-1.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded font-bold" title="কারেন্ট সারি মুছুন">🗑️ সারি</button>
               <button type="button" onclick="deleteTableCol()" class="px-1.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded font-bold" title="কারেন্ট কলাম মুছুন">🗑️ কলাম</button>
+              
+              <!-- Table Cell Background Color Picker -->
+              <label class="flex items-center gap-1 px-1.5 py-1 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded font-bold cursor-pointer" title="সিলেক্ট করা সেল/ঘরের ব্যাকগ্রাউন্ডের রং পরিবর্তন করুন">
+                <span class="text-[10px]">🪣 সেল রং:</span>
+                <input type="color" value="#ffffff" onchange="setTableCellBackground(this.value)" class="w-4 h-4 border-0 p-0 bg-transparent cursor-pointer">
+              </label>
+
+              <!-- Quick Row/Col Resize Buttons -->
+              <div class="flex items-center border border-amber-300 rounded overflow-hidden bg-white text-[10px]">
+                <button type="button" onclick="adjustCurrentRowHeight(12)" class="px-1.5 py-1 hover:bg-amber-100 font-bold border-r border-amber-200" title="সারি উচ্চতা বাড়ান (Row +)">Row ⬆</button>
+                <button type="button" onclick="adjustCurrentRowHeight(-12)" class="px-1.5 py-1 hover:bg-amber-100 font-bold border-r border-amber-200" title="সারি উচ্চতা কমান (Row -)">Row ⬇</button>
+                <button type="button" onclick="adjustCurrentColWidth(15)" class="px-1.5 py-1 hover:bg-amber-100 font-bold border-r border-amber-200" title="কলামের প্রস্থ বাড়ান (Col +)">Col ➡</button>
+                <button type="button" onclick="adjustCurrentColWidth(-15)" class="px-1.5 py-1 hover:bg-amber-100 font-bold" title="কলামের প্রস্থ কমান (Col -)">Col ⬅</button>
+              </div>
             </div>
 
             <button type="button" onclick="execWordCmd('removeFormat')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg text-gray-600 font-bold" title="ফরম্যাটিং মুছে সাধারণ টেক্সট করুন">🧹 ফরম্যাট ক্লিয়ার</button>
@@ -1122,6 +1136,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102512"></script>
+  <script src="/static/customer_print.js?v=2026102513"></script>
 </body>
 </html>

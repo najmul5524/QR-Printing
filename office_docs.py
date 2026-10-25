@@ -685,66 +685,65 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                         except Exception:
                             pass
 
-                # 2. Extract column widths from w:tblGrid/w:gridCol
-                raw_col_widths_dxa: List[float] = []
+                # 2. Extract column widths from w:tcW and w:tblGrid/w:gridCol
+                rows_el = tbl_el.findall(f"{W_NS}tr")
+                cell_widths_by_col: Dict[int, float] = {}
+                for tr in rows_el:
+                    c_idx = 0
+                    for tc in tr.findall(f"{W_NS}tc"):
+                        c_span = 1
+                        tcPr = tc.find(f"{W_NS}tcPr")
+                        if tcPr is not None:
+                            gs = tcPr.find(f"{W_NS}gridSpan")
+                            if gs is not None:
+                                try:
+                                    c_span = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
+                                except Exception:
+                                    c_span = 1
+                            tcW = tcPr.find(f"{W_NS}tcW")
+                            if tcW is not None:
+                                try:
+                                    w_type = tcW.attrib.get(f"{W_NS}type", "dxa").lower()
+                                    w_val = float(tcW.attrib.get(f"{W_NS}w", "0") or 0)
+                                    if w_val > 50 and w_type in ("dxa", ""):
+                                        if c_span == 1:
+                                            cell_widths_by_col[c_idx] = max(cell_widths_by_col.get(c_idx, 0.0), w_val / 20.0)
+                                except Exception:
+                                    pass
+                        c_idx += c_span
+
+                grid_widths_pt: List[float] = []
                 tblGrid = tbl_el.find(f"{W_NS}tblGrid")
                 if tblGrid is not None:
                     for gc in tblGrid.findall(f"{W_NS}gridCol"):
                         try:
-                            raw_col_widths_dxa.append(max(100.0, float(gc.attrib.get(f"{W_NS}w", "1000") or 1000)))
+                            grid_widths_pt.append(max(5.0, float(gc.attrib.get(f"{W_NS}w", "1000") or 1000) / 20.0))
                         except Exception:
-                            raw_col_widths_dxa.append(1000.0)
+                            grid_widths_pt.append(50.0)
 
-                rows_el = tbl_el.findall(f"{W_NS}tr")
-                # Fallback: scan rows to infer column widths from cells
-                if not raw_col_widths_dxa:
-                    inferred: Dict[int, float] = {}
-                    for tr in rows_el:
-                        c_idx = 0
-                        for tc in tr.findall(f"{W_NS}tc"):
-                            c_span = 1
-                            c_dxa = 1000.0
-                            tcPr = tc.find(f"{W_NS}tcPr")
-                            if tcPr is not None:
-                                tcW = tcPr.find(f"{W_NS}tcW")
-                                if tcW is not None:
-                                    try:
-                                        c_dxa = max(100.0, float(tcW.attrib.get(f"{W_NS}w", "1000") or 1000))
-                                    except Exception:
-                                        pass
-                                gs = tcPr.find(f"{W_NS}gridSpan")
-                                if gs is not None:
-                                    try:
-                                        c_span = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
-                                    except Exception:
-                                        c_span = 1
-                            if c_span == 1:
-                                inferred[c_idx] = max(inferred.get(c_idx, 0.0), c_dxa)
-                            c_idx += c_span
-                    if inferred:
-                        max_k = max(inferred.keys())
-                        raw_col_widths_dxa = [inferred.get(i, 1000.0) for i in range(max_k + 1)]
+                num_cols = max(len(grid_widths_pt), max(cell_widths_by_col.keys(), default=-1) + 1)
 
-                col_pts = [w / 20.0 for w in raw_col_widths_dxa]
-                total_grid_pt = sum(col_pts) if col_pts else avail_w_pt
+                has_valid_tc_widths = False
+                if len(cell_widths_by_col) == num_cols and num_cols > 1:
+                    vals = list(cell_widths_by_col.values())
+                    if (max(vals) - min(vals)) > 2.0:
+                        has_valid_tc_widths = True
 
-                # In Word, tables default to 100% of printable width between margins (avail_w_pt)
-                # unless explicitly set to a fixed narrow width in dxa (< 0.85 of avail_w_pt).
-                if specified_tbl_w_pt and specified_tbl_w_pt > 50 and specified_tbl_w_pt < (avail_w_pt * 0.85):
-                    target_w_pt = min(specified_tbl_w_pt, avail_w_pt)
+                has_valid_grid_widths = False
+                if len(grid_widths_pt) == num_cols and num_cols > 1:
+                    if (max(grid_widths_pt) - min(grid_widths_pt)) > 2.0:
+                        has_valid_grid_widths = True
+
+                if has_valid_tc_widths:
+                    chosen_pts = [cell_widths_by_col.get(i, 50.0) for i in range(num_cols)]
+                elif has_valid_grid_widths:
+                    chosen_pts = grid_widths_pt
+                elif len(cell_widths_by_col) == num_cols and num_cols > 0:
+                    chosen_pts = [cell_widths_by_col.get(i, 50.0) for i in range(num_cols)]
+                elif len(grid_widths_pt) == num_cols and num_cols > 0:
+                    chosen_pts = grid_widths_pt
                 else:
-                    target_w_pt = avail_w_pt
-
-                num_cols = len(col_pts)
-                is_dummy_equal = False
-                if num_cols > 1 and col_pts:
-                    min_w = min(col_pts)
-                    max_w = max(col_pts)
-                    if (max_w - min_w) < 2.0:
-                        is_dummy_equal = True
-
-                if is_dummy_equal and num_cols > 1:
-                    col_char_counts: List[int] = [0] * num_cols
+                    col_char_counts: List[int] = [0] * max(1, num_cols)
                     for tr in rows_el:
                         c_cur = 0
                         for tc in tr.findall(f"{W_NS}tc"):
@@ -758,34 +757,37 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                                     except Exception:
                                         c_span = 1
                             t_len = sum(len(t.text or "") for t in tc.iter(f"{W_NS}t"))
-                            if c_cur < num_cols and c_span == 1:
+                            if c_cur < len(col_char_counts) and c_span == 1:
                                 col_char_counts[c_cur] = max(col_char_counts[c_cur], t_len)
                             c_cur += c_span
 
                     weights: List[float] = []
                     for idx, ch_cnt in enumerate(col_char_counts):
                         if idx == 0 and ch_cnt <= 6:
-                            w = max(28.0, min(50.0, 34.0 + ch_cnt * 2.0))
+                            w = 32.0 + ch_cnt * 1.5
                         elif ch_cnt == 0:
-                            w = 38.0
+                            w = 35.0
                         else:
-                            w = max(45.0, 28.0 + (ch_cnt ** 0.5) * 18.0)
+                            w = max(40.0, min(380.0, ch_cnt * 7.0 + 25.0))
                         weights.append(w)
-                    total_w = sum(weights)
-                    final_col_pts = [round((w / total_w) * target_w_pt, 1) for w in weights]
-                    diff = target_w_pt - sum(final_col_pts)
-                    if final_col_pts:
-                        final_col_pts[-1] = round(final_col_pts[-1] + diff, 1)
-                elif total_grid_pt > 0 and col_pts:
-                    scale = target_w_pt / total_grid_pt
-                    final_col_pts = [max(16.0, round(w * scale, 1)) for w in col_pts]
-                    diff = target_w_pt - sum(final_col_pts)
-                    if final_col_pts:
-                        final_col_pts[-1] = round(final_col_pts[-1] + diff, 1)
-                else:
-                    final_col_pts = []
+                    chosen_pts = weights
+
+                total_grid_pt = sum(chosen_pts) or 1.0
+                target_w_pt = avail_w_pt
+                scale = target_w_pt / total_grid_pt
+                final_col_pts = [max(16.0, round(w * scale, 1)) for w in chosen_pts]
+                diff = target_w_pt - sum(final_col_pts)
+                if final_col_pts:
+                    final_col_pts[-1] = round(final_col_pts[-1] + diff, 1)
 
                 actual_tbl_w_pt = sum(final_col_pts) if final_col_pts else target_w_pt
+
+                col_pcts: List[float] = []
+                if final_col_pts:
+                    total_pts = sum(final_col_pts) or 1.0
+                    col_pcts = [round((w / total_pts) * 100.0, 2) for w in final_col_pts]
+                    diff_pct = 100.0 - sum(col_pcts)
+                    col_pcts[-1] = round(col_pcts[-1] + diff_pct, 2)
 
                 # 3. Pre-scan vertical merges (w:vMerge) across rows to prevent column shifts
                 vmerge_info: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -910,6 +912,9 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                             "word-break:break-word",
                             "overflow-wrap:break-word",
                         ]
+                        if col_pcts and curr_col < len(col_pcts):
+                            pct_span = sum(col_pcts[curr_col : curr_col + colspan])
+                            c_styles.append(f"width:{pct_span:.2f}%")
                         if row_h_pt:
                             c_styles.append(f"height:{row_h_pt:.1f}pt")
                         if cell_bg:
