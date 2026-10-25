@@ -177,14 +177,15 @@
     </div>
   </div>
 
-  <script src="/static/webrtc_transfer.js?v=2026102405"></script>
+  <script src="/static/webrtc_transfer.js?v=2026102522"></script>
   <script>
     const ROOM = "{{ room.id }}";
     const MAX = 50 * 1024 * 1024;
     const DEVICE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ? 'মোবাইল' : 'পিসি';
     const $ = (id) => document.getElementById(id);
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const fmtSize = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(0) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+    const fmtSize = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(0) + ' KB' : b < 1073741824 ? (b / 1048576).toFixed(1) + ' MB' : (b / 1073741824).toFixed(2) + ' GB';
+    const fmtSpeed = (bps) => bps < 1048576 ? (bps / 1024).toFixed(0) + ' KB/s' : (bps / 1048576).toFixed(1) + ' MB/s';
     const fmtTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' }); };
 
     const exp = new Date($('expText').dataset.iso);
@@ -325,14 +326,21 @@
           loadFiles();
         } else if (isP2P) {
           // Files > 50 MB go directly over WebRTC P2P
-          window.sendP2PFile(file, (loaded, total) => {
+          window.sendP2PFile(file, (loaded, total, speedBps) => {
             const p = Math.round(loaded / total * 100);
             row.querySelector('.bar').style.width = p + '%';
-            row.querySelector('.pct').textContent = `⚡ ${fmtSize(loaded)} / ${fmtSize(total)} (${p}%)`;
+            let speedTxt = '';
+            if (speedBps && speedBps > 1024) {
+              const rem = Math.max(0, total - loaded);
+              const etaSec = Math.round(rem / speedBps);
+              const etaTxt = etaSec > 60 ? `${Math.floor(etaSec / 60)} মি. ${etaSec % 60} সে.` : `${etaSec} সে.`;
+              speedTxt = ` • ⚡ ${fmtSpeed(speedBps)} (বাকি: ${etaTxt})`;
+            }
+            row.querySelector('.pct').textContent = `${fmtSize(loaded)} / ${fmtSize(total)} (${p}%)${speedTxt}`;
             if (p >= 100) {
               row.querySelector('.pct').textContent = `✅ সম্পূর্ণ (P2P ডিরেক্ট)`;
-              row.querySelector('.bar').classList.replace('from-pink-600', 'from-green-500');
-              row.querySelector('.bar').classList.replace('to-orange-500', 'to-green-600');
+              row.querySelector('.bar').classList.replace('from-pink-600', 'from-emerald-500');
+              row.querySelector('.bar').classList.replace('to-orange-500', 'to-emerald-600');
             }
           });
         } else {
