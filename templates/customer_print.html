@@ -92,10 +92,10 @@
 
       <!-- Normal Dropzone -->
       <div id="dropzoneNormal" class="border-2 border-dashed border-gray-300 hover:border-pink-500 rounded-xl p-6 text-center cursor-pointer transition bg-gray-50 hover:bg-pink-50/20">
-        <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/webp" class="hidden">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.rtf,.txt,image/png,image/jpeg,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain" class="hidden">
         <div class="text-3xl mb-1">📄</div>
         <p class="font-bold text-gray-700 text-sm">ফাইল ড্রপ করুন অথবা ক্লিক করুন</p>
-        <p class="text-xs text-gray-400 mt-1">PDF, JPG, PNG (সর্বোচ্চ ৫০ MB)</p>
+        <p class="text-xs text-gray-500 mt-1">PDF, Word (.docx/.doc), Excel (.xlsx/.xls), JPG, PNG (সর্বোচ্চ ৫০ MB)</p>
       </div>
 
       <!-- NID 2-Image Upload Box (Shown when NID tab active) -->
@@ -146,10 +146,13 @@
           </div>
         </div>
         <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+          <button type="button" id="btnOpenOfficeEdit" onclick="openOfficeEditModal()" class="hidden px-2 py-1 bg-amber-50 border border-amber-300 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ডকুমেন্ট বা টেবিল এডিট করুন">
+            <span>✏️</span> <span>এডিট</span>
+          </button>
           <button type="button" id="btnRotateFile" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ফাইল ৯০° ঘোরান">
             <span>↻</span> <span>ঘোরান</span>
           </button>
-          <button type="button" id="btnOpenCrop" class="hidden px-2 py-1 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ছবি ক্রপ করুন">
+          <button type="button" id="btnOpenCrop" class="hidden px-2 py-1 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ছবি বা PDF পাতা ক্রপ করুন">
             <span>✂️</span> <span>ক্রপ</span>
           </button>
           <button type="button" id="btnOpenCamScan" class="hidden px-2 py-1 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="ক্যামস্ক্যানার ইফেক্ট">
@@ -769,6 +772,13 @@
             <button type="button" id="btnCropSideBack" onclick="switchNidCropSide('back')" class="py-1.5 rounded-lg font-bold text-gray-700 hover:bg-gray-200">🔄 ২. পেছনের পিঠ (Back)</button>
           </div>
 
+          <!-- PDF Page Selector inside Crop Modal (Shown when cropping a multi-page PDF) -->
+          <div id="pdfCropPageBar" class="hidden flex items-center justify-between gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-2.5 py-1.5 text-xs">
+            <button type="button" onclick="changeModalPdfPage(-1, 'crop')" class="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-800 rounded-lg font-bold border border-indigo-200">◀ আগের পাতা</button>
+            <span id="pdfCropPageLabel" class="font-bold text-indigo-950">📄 পাতা ১ / ১ ক্রপ করছেন</span>
+            <button type="button" onclick="changeModalPdfPage(1, 'crop')" class="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-800 rounded-lg font-bold border border-indigo-200">পরের পাতা ▶</button>
+          </div>
+
           <!-- Crop Mode Switcher: 4-Corner Smart Perspective vs Standard Box Crop -->
           <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl text-xs">
             <button type="button" id="btnCropModeSmart" onclick="setCropMode('smart')" class="py-1.5 rounded-lg font-bold bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1">
@@ -906,6 +916,19 @@
           <button type="button" onclick="closeCamscanModal()" class="text-white hover:opacity-80 text-2xl leading-none">&times;</button>
         </div>
         <div class="p-3.5 space-y-3">
+          <!-- PDF Page & Scope Switcher inside CamScanner Modal -->
+          <div id="pdfCamscanScopeBar" class="hidden space-y-1.5 bg-emerald-50/80 border border-emerald-200 rounded-xl p-2 text-xs">
+            <div class="flex items-center justify-between gap-2">
+              <button type="button" onclick="changeModalPdfPage(-1, 'camscan')" class="px-2 py-1 bg-white hover:bg-emerald-100 text-emerald-800 rounded-lg font-bold border border-emerald-200">◀ আগের পাতা</button>
+              <span id="pdfCamscanPageLabel" class="font-bold text-emerald-950">📄 পাতা ১ / ১</span>
+              <button type="button" onclick="changeModalPdfPage(1, 'camscan')" class="px-2 py-1 bg-white hover:bg-emerald-100 text-emerald-800 rounded-lg font-bold border border-emerald-200">পরের পাতা ▶</button>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5 pt-1 border-t border-emerald-200/70">
+              <button type="button" id="camScopeSingle" onclick="setCamscanPdfScope(false)" class="py-1 rounded-lg font-bold bg-emerald-600 text-white shadow-sm">📄 শুধু এই পাতায় প্রয়োগ করুন</button>
+              <button type="button" id="camScopeAll" onclick="setCamscanPdfScope(true)" class="py-1 rounded-lg font-bold bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-100">📚 সব পাতায় প্রয়োগ করুন</button>
+            </div>
+          </div>
+
           <!-- Live Before/After Preview Box -->
           <div class="relative bg-gray-900 rounded-xl overflow-hidden flex items-center justify-center h-[320px] max-h-[46vh] border border-gray-800">
             <p id="camscanLoading" class="text-xs text-emerald-300 font-bold animate-pulse">⏳ স্ক্যান প্রিভিউ তৈরি হচ্ছে...</p>
@@ -954,6 +977,66 @@
       </div>
     </div>
 
+    <!-- Interactive Word / Excel / Document Editor Modal -->
+    <div id="officeEditModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
+      <div class="bg-white max-w-2xl w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border max-h-[92vh]">
+        <div class="px-4 py-3 bg-gradient-to-r from-amber-600 to-orange-600 text-white flex items-center justify-between shrink-0">
+          <h3 class="font-bold text-sm flex items-center gap-2">
+            <span>✏️</span> <span id="officeEditModalTitle">Word / Excel ডকুমেন্ট এডিটর</span>
+          </h3>
+          <button type="button" onclick="closeOfficeEditModal()" class="text-white hover:opacity-80 text-2xl leading-none">&times;</button>
+        </div>
+
+        <div class="p-3 bg-amber-50/70 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+          <!-- Word Formatting Toolbar -->
+          <div id="wordEditorToolbar" class="flex flex-wrap items-center gap-1">
+            <button type="button" onclick="execWordCmd('bold')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-extrabold" title="Bold">B</button>
+            <button type="button" onclick="execWordCmd('italic')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg italic font-serif" title="Italic">I</button>
+            <button type="button" onclick="execWordCmd('underline')" class="px-2.5 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg underline" title="Underline">U</button>
+            <button type="button" onclick="execWordCmd('justifyLeft')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold" title="Align Left">⬅ বামে</button>
+            <button type="button" onclick="execWordCmd('justifyCenter')" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold" title="Align Center">↔ মাঝে</button>
+            <button type="button" onclick="insertWordTable()" class="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-bold">➕ টেবিল</button>
+          </div>
+
+          <!-- Excel Grid Toolbar -->
+          <div id="excelEditorToolbar" class="hidden flex flex-wrap items-center gap-1.5">
+            <select id="excelSheetSelect" onchange="switchExcelSheet(this.value)" class="px-2 py-1 bg-white border border-amber-300 rounded-lg font-bold text-gray-800"></select>
+            <button type="button" onclick="addExcelRow()" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold">➕ নতুন সারি (Row)</button>
+            <button type="button" onclick="addExcelCol()" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold">➕ নতুন কলাম (Col)</button>
+            <button type="button" onclick="deleteLastExcelRow()" class="px-2 py-1 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-lg font-bold">🗑️ শেষ সারি মুছুন</button>
+          </div>
+
+          <div class="flex items-center gap-1.5 ml-auto">
+            <span class="text-[11px] font-bold text-gray-600">পেজ:</span>
+            <select id="officeEditOrientation" class="px-2 py-1 bg-white border border-gray-300 rounded-lg font-bold text-gray-800 text-xs">
+              <option value="portrait">📱 লম্বালম্বি (Portrait)</option>
+              <option value="landscape">🖥️ আড়াআড়ি (Landscape)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="p-3 overflow-y-auto flex-1 bg-slate-100">
+          <!-- Word Rich-Text Contenteditable Area -->
+          <div id="wordEditorArea" contenteditable="true" class="bg-white border border-gray-300 rounded-xl shadow-inner p-4 min-h-[340px] max-h-[56vh] overflow-y-auto text-sm text-gray-900 focus:outline-none focus:border-amber-500 leading-relaxed"></div>
+
+          <!-- Excel Interactive Spreadsheet Grid Area -->
+          <div id="excelEditorArea" class="hidden bg-white border border-gray-300 rounded-xl shadow-inner p-2 min-h-[340px] max-h-[56vh] overflow-auto">
+            <table id="excelGridTable" class="w-full border-collapse text-xs"></table>
+          </div>
+        </div>
+
+        <div class="p-3 bg-gray-50 border-t flex items-center justify-between gap-2 shrink-0">
+          <span class="text-[11px] text-gray-500 font-medium">💡 যেকোনো লেখা বা ঘর ক্লিক করে পরিবর্তন করুন এবং সেভ চাপুন</span>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="closeOfficeEditModal()" class="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600">বাতিল</button>
+            <button type="button" id="btnSaveOfficeEdit" onclick="saveOfficeEditedDocument()" class="px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
+              <span>✓</span> <span>পরিবর্তন সেভ করুন</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <script>
@@ -970,6 +1053,6 @@
       photo_a4: {{ shop.rate_photo_a4 }}
     };
   </script>
-  <script src="/static/customer_print.js?v=2026102408"></script>
+  <script src="/static/customer_print.js?v=2026102409"></script>
 </body>
 </html>

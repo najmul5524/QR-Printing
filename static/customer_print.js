@@ -488,17 +488,33 @@
     dropzoneNormal.classList.add('hidden');
     dropzoneNid.classList.add('hidden');
     $('fileNameText').innerText = uploadedFile.original_filename;
+    const isImg = uploadedFile.file_type === 'image';
+    const isPdf = uploadedFile.file_type === 'pdf';
+    const iconEl = $('fileIcon');
+    if (iconEl) {
+      if (uploadedFile.doc_kind === 'excel') iconEl.innerText = '📊';
+      else if (uploadedFile.doc_kind === 'word') iconEl.innerText = '📝';
+      else if (isImg) iconEl.innerText = '🖼️';
+      else iconEl.innerText = '📄';
+    }
     $('fileMetaText').innerText = uploadedFile.is_nid
       ? 'NID কার্ড — A4 পেজে সামনে ও পেছনে (আসল মাপ ৮৫.৬×৫৪ মিমি)'
-      : `মোট পেজ: ${bn(uploadedFile.page_count)} টি`;
+      : `মোট পেজ: ${bn(uploadedFile.page_count)} টি${uploadedFile.is_office ? ' (এডিটযোগ্য)' : ''}`;
     fileInfoBadge.classList.remove('hidden');
-    const isImg = uploadedFile.file_type === 'image';
+
+    const canCropOrScan = isImg || isPdf;
     const btnCrop = $('btnOpenCrop');
     const btnCam = $('btnOpenCamScan');
     const btnRbg = $('btnOpenRemoveBg');
-    if (btnCrop) btnCrop.classList.toggle('hidden', !isImg);
-    if (btnCam) btnCam.classList.toggle('hidden', !isImg);
+    const btnOfficeEdit = $('btnOpenOfficeEdit');
+    if (btnCrop) btnCrop.classList.toggle('hidden', !canCropOrScan);
+    if (btnCam) btnCam.classList.toggle('hidden', !canCropOrScan);
     if (btnRbg) btnRbg.classList.toggle('hidden', !isImg);
+    if (btnOfficeEdit) btnOfficeEdit.classList.toggle('hidden', !isPdf || !!uploadedFile.is_nid);
+
+    if (uploadedFile.office_orientation === 'landscape') {
+      selectRadio('optLandscape');
+    }
 
     refreshTopLivePreview();
 
@@ -510,7 +526,6 @@
       return;
     }
 
-    const isPdf = uploadedFile.file_type === 'pdf';
     // 4x6 passport sheet only makes sense for images; N-up only for PDFs
     optPhoto.classList.toggle('hidden', isPdf);
     if (isPdf) selectRadio('optDocA4');
@@ -1458,6 +1473,9 @@
     }
   }
 
+  let modalPdfPage = 1;
+  let camscanApplyAllPages = false;
+
   window.autoDetectSmartCorners = async function(silentIfDragging) {
     if (!uploadedFile) return;
     if (smartImg && smartImg.complete && (smartImg.naturalWidth || smartImg.width) > 0) {
@@ -1468,7 +1486,7 @@
       drawSmartCrop();
     }
     try {
-      const res = await fetch(`/api/image/detect-corners?file_id=${encodeURIComponent(uploadedFile.file_id)}&side=${encodeURIComponent(cropNidSide)}&t=${Date.now()}`);
+      const res = await fetch(`/api/image/detect-corners?file_id=${encodeURIComponent(uploadedFile.file_id)}&side=${encodeURIComponent(cropNidSide)}&page=${modalPdfPage}&t=${Date.now()}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.points) && data.points.length === 4) {
         if (!silentIfDragging || activeDragIdx === -1) {
@@ -1758,6 +1776,49 @@
     }
   };
 
+  function updateModalPdfPageLabels() {
+    const total = Math.max(1, (uploadedFile && uploadedFile.page_count) ? uploadedFile.page_count : 1);
+    const cropBar = $('pdfCropPageBar');
+    const cropLbl = $('pdfCropPageLabel');
+    if (cropBar) cropBar.classList.toggle('hidden', !(uploadedFile && uploadedFile.file_type === 'pdf' && total > 1));
+    if (cropLbl) cropLbl.innerText = `📄 পাতা ${bn(modalPdfPage)} / ${bn(total)} ক্রপ করছেন`;
+
+    const scanBar = $('pdfCamscanScopeBar');
+    const scanLbl = $('pdfCamscanPageLabel');
+    if (scanBar) scanBar.classList.toggle('hidden', !(uploadedFile && uploadedFile.file_type === 'pdf'));
+    if (scanLbl) scanLbl.innerText = `📄 পাতা ${bn(modalPdfPage)} / ${bn(total)}`;
+  }
+
+  window.changeModalPdfPage = function(delta, whichModal) {
+    if (!uploadedFile || uploadedFile.file_type !== 'pdf') return;
+    const total = Math.max(1, uploadedFile.page_count || 1);
+    const next = Math.max(1, Math.min(total, modalPdfPage + delta));
+    if (next === modalPdfPage) return;
+    modalPdfPage = next;
+    docInlinePage = next;
+    updateModalPdfPageLabels();
+    if (whichModal === 'crop') {
+      loadCropTargetImage();
+    } else if (whichModal === 'camscan') {
+      window.selectCamscanMode(currentCamscanMode);
+      prefetchCamscanModes();
+    }
+  };
+
+  window.setCamscanPdfScope = function(applyAll) {
+    camscanApplyAllPages = !!applyAll;
+    const bSingle = $('camScopeSingle');
+    const bAll = $('camScopeAll');
+    if (bSingle && bAll) {
+      bSingle.className = !camscanApplyAllPages
+        ? 'py-1 rounded-lg font-bold bg-emerald-600 text-white shadow-sm'
+        : 'py-1 rounded-lg font-bold bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-100';
+      bAll.className = camscanApplyAllPages
+        ? 'py-1 rounded-lg font-bold bg-emerald-600 text-white shadow-sm'
+        : 'py-1 rounded-lg font-bold bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-100';
+    }
+  };
+
   function initNormalCropper() {
     const target = $('cropImgTarget');
     if (cropper) {
@@ -1765,9 +1826,10 @@
       cropper = null;
     }
     const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
-    const fastSrc = (!uploadedFile.is_nid && instantLocalUrl)
+    const pageParam = (uploadedFile && uploadedFile.file_type === 'pdf') ? `&page=${modalPdfPage}` : '';
+    const fastSrc = (uploadedFile && uploadedFile.file_type === 'image' && !uploadedFile.is_nid && instantLocalUrl)
       ? instantLocalUrl
-      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}`;
+      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}${pageParam}`;
     target.onload = () => {
       cropper = new Cropper(target, {
         viewMode: 1,
@@ -1786,9 +1848,10 @@
     initSmartCanvasEvents();
     resetSmartPtsDefault();
     const sideParam = (uploadedFile && uploadedFile.is_nid) ? `&side=${cropNidSide}` : '';
-    const imgUrl = (!uploadedFile.is_nid && instantLocalUrl)
+    const pageParam = (uploadedFile && uploadedFile.file_type === 'pdf') ? `&page=${modalPdfPage}` : '';
+    const imgUrl = (uploadedFile && uploadedFile.file_type === 'image' && !uploadedFile.is_nid && instantLocalUrl)
       ? instantLocalUrl
-      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}`;
+      : `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=1100&v=${fileRev}${sideParam}${pageParam}`;
 
     smartImg = new Image();
     smartImg.crossOrigin = 'anonymous';
@@ -2041,10 +2104,12 @@
   }
 
   window.openCropModal = function(side) {
-    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    if (!uploadedFile || (uploadedFile.file_type !== 'image' && uploadedFile.file_type !== 'pdf')) return;
     const modal = $('cropModal');
     const nidSwitch = $('nidCropSideSwitch');
     if (nidSwitch) nidSwitch.classList.toggle('hidden', !uploadedFile.is_nid);
+    modalPdfPage = Math.max(1, Math.min(uploadedFile.page_count || 1, docInlinePage || 1));
+    updateModalPdfPageLabels();
     modal.classList.remove('hidden');
 
     currentCropEnhanceFx = 'none';
@@ -2141,6 +2206,7 @@
           body: JSON.stringify({
             file_id: uploadedFile.file_id,
             side: cropNidSide,
+            page: modalPdfPage,
             points: smartPts,
             ratio: smartTargetRatio,
             enhance_mode: currentCropEnhanceFx
@@ -2220,6 +2286,7 @@
           body: JSON.stringify({
             file_id: uploadedFile.file_id,
             side: cropNidSide,
+            page: modalPdfPage,
             points: smartPts,
             ratio: smartTargetRatio,
             enhance_mode: currentCropEnhanceFx
@@ -2238,6 +2305,7 @@
         const fd = new FormData();
         fd.append('file_id', uploadedFile.file_id);
         fd.append('side', cropNidSide);
+        fd.append('page', String(modalPdfPage));
         fd.append('file', pendingCropBlob, 'cropped.jpg');
 
         const res = await fetch('/api/image/save-crop', {
@@ -2252,8 +2320,10 @@
       }
 
       bumpFileRev();
-      if (!uploadedFile.is_nid && pendingCropBlob) {
+      if (uploadedFile.file_type === 'image' && !uploadedFile.is_nid && pendingCropBlob) {
         instantLocalUrl = URL.createObjectURL(pendingCropBlob);
+      } else if (uploadedFile.file_type === 'pdf') {
+        docInlinePage = modalPdfPage;
       }
       closeCropModal();
       refreshTopLivePreview(true);
@@ -2284,7 +2354,8 @@
   function getCamscanCacheKey(mode, strength) {
     if (!uploadedFile) return '';
     const effStr = mode === 'original' ? 'normal' : (strength || 'normal');
-    return `${uploadedFile.file_id}|${fileRev}|${mode}|${effStr}`;
+    const pg = uploadedFile.file_type === 'pdf' ? modalPdfPage : 1;
+    return `${uploadedFile.file_id}|${fileRev}|${pg}|${mode}|${effStr}`;
   }
 
   function prefetchCamscanModes() {
@@ -2295,7 +2366,7 @@
       if (camscanBlobCache.has(key)) return;
       setTimeout(() => {
         if (!uploadedFile || camscanBlobCache.has(key)) return;
-        const url = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(m)}&strength=${encodeURIComponent(currentCamscanStrength)}&v=${fileRev}`;
+        const url = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(m)}&strength=${encodeURIComponent(currentCamscanStrength)}&page=${modalPdfPage}&v=${fileRev}`;
         fetch(url)
           .then(r => r.ok ? r.blob() : null)
           .then(b => {
@@ -2307,7 +2378,10 @@
   }
 
   window.openCamscanModal = function() {
-    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    if (!uploadedFile || (uploadedFile.file_type !== 'image' && uploadedFile.file_type !== 'pdf')) return;
+    modalPdfPage = Math.max(1, Math.min(uploadedFile.page_count || 1, docInlinePage || 1));
+    updateModalPdfPageLabels();
+    window.setCamscanPdfScope(false);
     const modal = $('camscanModal');
     if (modal) modal.classList.remove('hidden');
     window.setCamscanStrength(currentCamscanStrength, true);
@@ -2370,7 +2444,7 @@
 
     loader.classList.remove('hidden');
     img.classList.add('hidden');
-    const previewUrl = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(mode)}&strength=${encodeURIComponent(currentCamscanStrength)}&v=${fileRev}`;
+    const previewUrl = `/api/image/camscan-preview?file_id=${encodeURIComponent(uploadedFile.file_id)}&mode=${encodeURIComponent(mode)}&strength=${encodeURIComponent(currentCamscanStrength)}&page=${modalPdfPage}&v=${fileRev}`;
     fetch(previewUrl)
       .then(r => {
         if (!r.ok) throw new Error('Preview error');
@@ -2404,14 +2478,18 @@
         body: JSON.stringify({
           file_id: uploadedFile.file_id,
           mode: currentCamscanMode,
-          strength: currentCamscanStrength
+          strength: currentCamscanStrength,
+          page: modalPdfPage,
+          apply_all: camscanApplyAllPages
         })
       });
       const data = await res.json();
       if (data.success) {
         const cachedUrl = camscanBlobCache.get(getCamscanCacheKey(currentCamscanMode, currentCamscanStrength));
-        if (!uploadedFile.is_nid && cachedUrl) {
+        if (uploadedFile.file_type === 'image' && !uploadedFile.is_nid && cachedUrl) {
           instantLocalUrl = cachedUrl;
+        } else if (uploadedFile.file_type === 'pdf') {
+          docInlinePage = modalPdfPage;
         }
         bumpFileRev();
         closeCamscanModal();
@@ -2426,6 +2504,228 @@
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = '<span>✓</span> <span>স্ক্যান সেভ করুন</span>';
+      }
+    }
+  };
+
+  // ── Interactive Word / Excel / Document Editor Modal Logic ──
+  let officeEditorState = {
+    doc_kind: 'word',
+    title: 'Document',
+    orientation: 'portrait',
+    html: '',
+    sheets: [],
+    activeSheetIdx: 0
+  };
+
+  function syncActiveExcelDomToState() {
+    if (officeEditorState.doc_kind !== 'excel' || !Array.isArray(officeEditorState.sheets)) return;
+    const s = officeEditorState.sheets[officeEditorState.activeSheetIdx];
+    if (!s) return;
+    const tbl = $('excelGridTable');
+    if (!tbl) return;
+    const newRows = [];
+    tbl.querySelectorAll('tr[data-row]').forEach(tr => {
+      const rowVals = [];
+      tr.querySelectorAll('input[data-col]').forEach(inp => {
+        rowVals.push(inp.value || '');
+      });
+      newRows.push(rowVals);
+    });
+    if (newRows.length > 0) {
+      s.rows = newRows;
+    }
+  }
+
+  function renderExcelGridInModal() {
+    const tbl = $('excelGridTable');
+    if (!tbl || !Array.isArray(officeEditorState.sheets)) return;
+    const s = officeEditorState.sheets[officeEditorState.activeSheetIdx] || { name: 'Sheet 1', rows: [['']] };
+    const rows = Array.isArray(s.rows) && s.rows.length > 0 ? s.rows : [['', '', '']];
+    const colCount = Math.max(1, ...rows.map(r => (r ? r.length : 1)));
+
+    let html = '<thead><tr class="bg-slate-200 text-slate-700 font-bold"><th class="border border-slate-300 px-2 py-1 w-9 text-center">#</th>';
+    for (let c = 0; c < colCount; c++) {
+      const colLetter = String.fromCharCode(65 + (c % 26)) + (c >= 26 ? Math.floor(c / 26) : '');
+      html += `<th class="border border-slate-300 px-2 py-1 min-w-[95px] text-center">${colLetter}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    rows.forEach((r, rIdx) => {
+      const isHeader = rIdx === 0 && rows.length > 1;
+      html += `<tr data-row="${rIdx}" class="${isHeader ? 'bg-amber-50/70 font-bold' : 'hover:bg-slate-50'}">`;
+      html += `<td class="border border-slate-300 px-1.5 py-1 text-center text-gray-500 font-mono bg-slate-100">${rIdx + 1}</td>`;
+      for (let c = 0; c < colCount; c++) {
+        const val = (r && r[c] !== undefined && r[c] !== null) ? String(r[c]).replace(/"/g, '&quot;') : '';
+        html += `<td class="border border-slate-300 p-0"><input type="text" data-col="${c}" value="${val}" class="w-full px-2 py-1.5 text-xs bg-transparent focus:bg-amber-50 focus:outline-none ${isHeader ? 'font-bold text-gray-900' : 'text-gray-800'}"></td>`;
+      }
+      html += '</tr>';
+    });
+    html += '</tbody>';
+    tbl.innerHTML = html;
+  }
+
+  window.openOfficeEditModal = async function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'pdf') return;
+    const modal = $('officeEditModal');
+    if (modal) modal.classList.remove('hidden');
+    const wordArea = $('wordEditorArea');
+    const excelArea = $('excelEditorArea');
+    const wordTb = $('wordEditorToolbar');
+    const excelTb = $('excelEditorToolbar');
+    if (wordArea) wordArea.innerHTML = '<p class="text-gray-500 animate-pulse">⏳ ডকুমেন্ট লোড হচ্ছে...</p>';
+
+    try {
+      const res = await fetch(`/api/office/content/${encodeURIComponent(uploadedFile.file_id)}?t=${Date.now()}`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.detail || 'ডকুমেন্ট লোড করা যায়নি');
+        closeOfficeEditModal();
+        return;
+      }
+
+      officeEditorState = {
+        doc_kind: data.doc_kind || 'word',
+        title: data.title || uploadedFile.original_filename || 'Document',
+        orientation: data.orientation || (checked('orientation') || 'portrait'),
+        html: data.html || '<p>&nbsp;</p>',
+        sheets: Array.isArray(data.sheets) && data.sheets.length > 0 ? data.sheets : [{ name: 'Sheet 1', rows: [['', '', '']] }],
+        activeSheetIdx: 0
+      };
+
+      const titleEl = $('officeEditModalTitle');
+      if (titleEl) {
+        titleEl.innerText = officeEditorState.doc_kind === 'excel'
+          ? `📊 Excel স্প্রেডশিট এডিটর — ${officeEditorState.title}`
+          : `📝 Word / ডকুমেন্ট এডিটর — ${officeEditorState.title}`;
+      }
+
+      const orientSel = $('officeEditOrientation');
+      if (orientSel) orientSel.value = officeEditorState.orientation;
+
+      const isExcel = officeEditorState.doc_kind === 'excel';
+      if (wordArea) wordArea.classList.toggle('hidden', isExcel);
+      if (excelArea) excelArea.classList.toggle('hidden', !isExcel);
+      if (wordTb) wordTb.classList.toggle('hidden', isExcel);
+      if (excelTb) excelTb.classList.toggle('hidden', !isExcel);
+
+      if (isExcel) {
+        const sheetSel = $('excelSheetSelect');
+        if (sheetSel) {
+          sheetSel.innerHTML = officeEditorState.sheets
+            .map((s, idx) => `<option value="${idx}">📊 ${s.name || ('Sheet ' + (idx + 1))}</option>`)
+            .join('');
+          sheetSel.value = '0';
+        }
+        renderExcelGridInModal();
+      } else if (wordArea) {
+        wordArea.innerHTML = officeEditorState.html;
+      }
+    } catch (e) {
+      alert('ডকুমেন্ট লোড ব্যর্থ হয়েছে: ' + e);
+      closeOfficeEditModal();
+    }
+  };
+
+  window.closeOfficeEditModal = function() {
+    const modal = $('officeEditModal');
+    if (modal) modal.classList.add('hidden');
+  };
+
+  window.execWordCmd = function(cmd) {
+    const area = $('wordEditorArea');
+    if (area) area.focus();
+    document.execCommand(cmd, false, null);
+  };
+
+  window.insertWordTable = function() {
+    const area = $('wordEditorArea');
+    if (!area) return;
+    area.focus();
+    const tblHtml = '<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse; width:100%; margin:8px 0;"><tr><td style="border:1px solid #475569; padding:5px;">কলাম ১</td><td style="border:1px solid #475569; padding:5px;">কলাম ২</td><td style="border:1px solid #475569; padding:5px;">কলাম ৩</td></tr><tr><td style="border:1px solid #475569; padding:5px;">&nbsp;</td><td style="border:1px solid #475569; padding:5px;">&nbsp;</td><td style="border:1px solid #475569; padding:5px;">&nbsp;</td></tr></table><p>&nbsp;</p>';
+    document.execCommand('insertHTML', false, tblHtml);
+  };
+
+  window.switchExcelSheet = function(idxStr) {
+    syncActiveExcelDomToState();
+    officeEditorState.activeSheetIdx = Math.max(0, parseInt(idxStr, 10) || 0);
+    renderExcelGridInModal();
+  };
+
+  window.addExcelRow = function() {
+    syncActiveExcelDomToState();
+    const s = officeEditorState.sheets[officeEditorState.activeSheetIdx];
+    if (!s) return;
+    const cols = s.rows && s.rows[0] ? s.rows[0].length : 3;
+    s.rows.push(new Array(cols).fill(''));
+    renderExcelGridInModal();
+  };
+
+  window.addExcelCol = function() {
+    syncActiveExcelDomToState();
+    const s = officeEditorState.sheets[officeEditorState.activeSheetIdx];
+    if (!s || !Array.isArray(s.rows)) return;
+    s.rows.forEach(r => r.push(''));
+    renderExcelGridInModal();
+  };
+
+  window.deleteLastExcelRow = function() {
+    syncActiveExcelDomToState();
+    const s = officeEditorState.sheets[officeEditorState.activeSheetIdx];
+    if (!s || !Array.isArray(s.rows) || s.rows.length <= 1) return;
+    s.rows.pop();
+    renderExcelGridInModal();
+  };
+
+  window.saveOfficeEditedDocument = async function() {
+    if (!uploadedFile) return;
+    const btn = $('btnSaveOfficeEdit');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerText = 'সেভ ও প্রিভিউ তৈরি হচ্ছে...';
+    }
+    try {
+      const orientSel = $('officeEditOrientation');
+      const chosenOrient = orientSel ? orientSel.value : 'portrait';
+      if (officeEditorState.doc_kind === 'excel') {
+        syncActiveExcelDomToState();
+      } else {
+        const wordArea = $('wordEditorArea');
+        if (wordArea) officeEditorState.html = wordArea.innerHTML;
+      }
+
+      const res = await fetch('/api/office/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          doc_kind: officeEditorState.doc_kind,
+          title: officeEditorState.title,
+          orientation: chosenOrient,
+          html: officeEditorState.html,
+          sheets: officeEditorState.sheets
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.detail || 'ডকুমেন্ট সেভ ব্যর্থ হয়েছে');
+        return;
+      }
+
+      uploadedFile.page_count = data.page_count || uploadedFile.page_count;
+      uploadedFile.office_orientation = chosenOrient;
+      selectRadio(chosenOrient === 'landscape' ? 'optLandscape' : 'optPortrait');
+      $('fileMetaText').innerText = `মোট পেজ: ${bn(uploadedFile.page_count)} টি (এডিট করা হয়েছে)`;
+      bumpFileRev();
+      closeOfficeEditModal();
+      calculateBill();
+      refreshTopLivePreview(true);
+    } catch (e) {
+      alert('সার্ভার এরর: ' + e);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✓</span> <span>পরিবর্তন সেভ করুন</span>';
       }
     }
   };

@@ -1016,14 +1016,24 @@ def clean_rotation(value) -> int:
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Uploads file temporarily, validates it, parses page count and returns file info."""
+    """Uploads file temporarily, validates it, converts Office documents if needed, and returns file info."""
+    import office_docs
     ext = utils.get_ext(file.filename or "")
-    if ext not in ["pdf", "jpg", "jpeg", "png", "webp"]:
-        raise HTTPException(status_code=400, detail="শুধুমাত্র PDF অথবা ছবি (JPG, PNG) আপলোড করা যাবে।")
+    allowed_exts = {"pdf", "jpg", "jpeg", "png", "webp"} | office_docs.OFFICE_EXTENSIONS
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail="শুধুমাত্র PDF, Word (.docx/.doc), Excel (.xlsx/.xls/.csv) অথবা ছবি (JPG, PNG) আপলোড করা যাবে।"
+        )
 
     fid = uuid.uuid4().hex[:10]
     raw_path = os.path.join(UPLOAD_DIR, f"raw_{fid}.{ext}")
     size = await save_upload_limited(file, raw_path)
+    orig_safe_name = utils.safe_filename(file.filename, "document")
+
+    is_office = False
+    doc_kind = None
+    office_orientation = "portrait"
 
     if ext == "pdf":
         file_id = f"{fid}.pdf"
@@ -1033,6 +1043,24 @@ async def upload_file(file: UploadFile = File(...)):
         if not ok:
             utils.secure_delete_file(save_path)
             raise HTTPException(status_code=400, detail=msg)
+        file_type = "pdf"
+    elif ext in office_docs.OFFICE_EXTENSIONS:
+        file_id = f"{fid}.pdf"
+        save_path = os.path.join(UPLOAD_DIR, file_id)
+        state_path = os.path.join(UPLOAD_DIR, f"office_{fid}.json")
+        try:
+            info = await asyncio.to_thread(
+                office_docs.convert_office_file_to_pdf_and_state,
+                raw_path, ext, orig_safe_name, save_path, state_path
+            )
+            is_office = True
+            doc_kind = info.get("doc_kind", "word")
+            office_orientation = info.get("orientation", "portrait")
+        except Exception as e:
+            utils.secure_delete_file(save_path)
+            raise HTTPException(status_code=400, detail=f"Word/Excel ফাইলটি প্রসেস করা যায়নি: {e}")
+        finally:
+            utils.secure_delete_file(raw_path)
         file_type = "pdf"
     else:
         file_id = f"{fid}.jpg"
@@ -1048,11 +1076,76 @@ async def upload_file(file: UploadFile = File(...)):
     pages = utils.get_file_page_count(save_path, file_type)
     return {
         "file_id": file_id,
-        "original_filename": utils.safe_filename(file.filename, "document"),
+        "original_filename": orig_safe_name,
         "file_type": file_type,
         "page_count": pages,
         "file_size": size,
+        "is_office": is_office,
+        "doc_kind": doc_kind,
+        "office_orientation": office_orientation,
         "preview_url": f"/api/preview/{file_id}"
+    }
+
+
+@app.get("/api/office/content/{file_id}")
+def get_office_editable_content(file_id: str):
+    """Returns editable HTML / spreadsheet rows for an uploaded Word, Excel, or PDF document."""
+    import office_docs
+    safe_id = os.path.basename(str(file_id or ""))
+    src = resolve_upload(safe_id)
+    fid = safe_id.rsplit(".", 1)[0]
+    state_path = os.path.join(UPLOAD_DIR, f"office_{fid}.json")
+    if os.path.isfile(state_path):
+        with open(state_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"success": True, **data}
+    if utils.get_ext(src) == "pdf":
+        state = office_docs.extract_pdf_editable_state(src, safe_id)
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        return {"success": True, **state}
+    raise HTTPException(status_code=400, detail="এই ফাইলটি টেক্সট/টেবিল হিসেবে এডিট করা যাবে না")
+
+
+@app.post("/api/office/save")
+async def save_office_editable_content(payload: dict = Body(...)):
+    """Saves customer edits to a Word/Excel/PDF document and regenerates the printable PDF."""
+    import office_docs
+    file_id = os.path.basename(str(payload.get("file_id", "")))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) != "pdf":
+        raise HTTPException(status_code=400, detail="শুধু ডকুমেন্ট ফাইল এডিট করে সেভ করা যাবে")
+
+    fid = file_id.rsplit(".", 1)[0]
+    state_path = os.path.join(UPLOAD_DIR, f"office_{fid}.json")
+    doc_kind = str(payload.get("doc_kind", "word"))
+    orientation = clean_choice(str(payload.get("orientation", "portrait")), ("portrait", "landscape"), "portrait")
+    title = str(payload.get("title", "Document"))
+
+    if doc_kind == "excel" and isinstance(payload.get("sheets"), list):
+        sheets = payload["sheets"]
+        html_body = office_docs.sheets_to_html(sheets, title=title)
+    else:
+        sheets = None
+        html_body = str(payload.get("html", "<p>&nbsp;</p>"))
+
+    state = {
+        "doc_kind": doc_kind,
+        "title": title,
+        "orientation": orientation,
+        "html": html_body,
+        "sheets": sheets,
+    }
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
+
+    pages = await asyncio.to_thread(office_docs.render_html_to_pdf, html_body, src, orientation)
+    _update_orig_backup(src)
+    return {
+        "success": True,
+        "file_id": file_id,
+        "page_count": pages,
+        "orientation": orientation
     }
 
 
@@ -1107,8 +1200,8 @@ def nid_preview(token: str, color: str = "color", fit: str = "cover", rf: int = 
 
 
 @app.get("/api/preview/{file_id}")
-def preview_file(file_id: str, side: str = "front", w: int = 0):
-    """Provides safe preview of the uploaded file, with optional fast resized width w for instant UI previews."""
+def preview_file(file_id: str, side: str = "front", w: int = 0, page: int = 1):
+    """Provides safe preview of the uploaded file, with optional fast resized width w for instant UI previews (including PDF pages)."""
     safe_id = os.path.basename(str(file_id or ""))
     if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = safe_id[4:]
@@ -1117,18 +1210,31 @@ def preview_file(file_id: str, side: str = "front", w: int = 0):
     else:
         file_path = resolve_upload(safe_id)
     ext = utils.get_ext(file_path)
-    if w and 150 <= w <= 1600 and ext in ("jpg", "jpeg", "png", "webp"):
-        try:
-            with Image.open(file_path) as im:
-                im = ImageOps.exif_transpose(im).convert("RGB")
+    if w and 150 <= w <= 1600:
+        if ext in ("jpg", "jpeg", "png", "webp"):
+            try:
+                with Image.open(file_path) as im:
+                    im = ImageOps.exif_transpose(im).convert("RGB")
+                    if max(im.size) > w:
+                        im.thumbnail((w, w), Image.Resampling.BILINEAR)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=82)
+                    return Response(content=buf.getvalue(), media_type="image/jpeg",
+                                    headers={"Cache-Control": "private, max-age=60"})
+            except Exception:
+                pass
+        elif ext == "pdf":
+            try:
+                import office_docs
+                im = office_docs.render_pdf_page_pil(file_path, page_num=page, dpi=150)
                 if max(im.size) > w:
                     im.thumbnail((w, w), Image.Resampling.BILINEAR)
                 buf = io.BytesIO()
-                im.save(buf, "JPEG", quality=82)
+                im.save(buf, "JPEG", quality=84)
                 return Response(content=buf.getvalue(), media_type="image/jpeg",
-                                headers={"Cache-Control": "private, max-age=60"})
-        except Exception:
-            pass
+                                headers={"Cache-Control": "private, max-age=30"})
+            except Exception:
+                pass
     media_type = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                   "png": "image/png", "webp": "image/webp"}.get(ext, "application/octet-stream")
     return FileResponse(file_path, media_type=media_type,
@@ -1236,12 +1342,13 @@ async def crop_image_endpoint(payload: dict = Body(...)):
 
 
 @app.get("/api/image/camscan-preview")
-def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: str = "normal"):
-    """Renders a live preview of the CamScanner effect without overwriting the saved file yet."""
+def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: str = "normal", page: int = 1):
+    """Renders a live preview of the CamScanner effect without overwriting the saved file yet (supports images, NID, and PDF pages)."""
     file_id = os.path.basename(str(file_id or ""))
     mode = clean_choice(mode, ("original", "magic_color", "bw_doc", "hd_clear", "grayscale"), "magic_color")
     strength = clean_choice(strength, ("light", "normal", "strong"), "normal")
     import image_fx
+    import office_docs
 
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
@@ -1267,9 +1374,19 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: 
             return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
 
     src = resolve_upload(file_id)
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images can be scanned/enhanced")
+    ext = utils.get_ext(src)
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        raise HTTPException(status_code=400, detail="Only images and PDFs can be scanned/enhanced")
     orig = _ensure_orig_backup(src)
+    if ext == "pdf":
+        im = office_docs.render_pdf_page_pil(orig, page_num=page, dpi=140)
+        im.thumbnail((840, 840), Image.Resampling.BILINEAR)
+        if mode != "original":
+            im = image_fx.camscanner_process(im, mode=mode, strength=strength)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=84)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
+
     with Image.open(orig) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         im.thumbnail((840, 840), Image.Resampling.BILINEAR)
@@ -1282,12 +1399,15 @@ def camscan_preview_endpoint(file_id: str, mode: str = "magic_color", strength: 
 
 @app.post("/api/image/camscan")
 async def camscan_image_endpoint(payload: dict = Body(...)):
-    """Applies CamScanner document flattening & clarity enhancement to an uploaded document/photo or NID card."""
+    """Applies CamScanner document flattening & clarity enhancement to an uploaded photo, NID card, or PDF (single page or all pages)."""
     import shutil
     import image_fx
+    import office_docs
     file_id = os.path.basename(str(payload.get("file_id", "")))
     mode = clean_choice(str(payload.get("mode", "magic_color")).strip(), ("original", "magic_color", "bw_doc", "hd_clear", "grayscale"), "magic_color")
     strength = clean_choice(str(payload.get("strength", "normal")).strip(), ("light", "normal", "strong"), "normal")
+    page_num = max(1, int(payload.get("page", 1) or 1))
+    apply_all = bool(payload.get("apply_all", False))
 
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
@@ -1304,10 +1424,25 @@ async def camscan_image_endpoint(payload: dict = Body(...)):
         return {"success": True, "file_id": file_id, "mode": mode, "strength": strength}
 
     src = resolve_upload(file_id)
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images can be scanned/enhanced")
+    ext = utils.get_ext(src)
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        raise HTTPException(status_code=400, detail="Only images and PDFs can be scanned/enhanced")
 
     orig = _ensure_orig_backup(src)
+    if ext == "pdf":
+        if apply_all:
+            if mode == "original":
+                shutil.copy2(orig, src)
+                office_docs._clear_nup_caches_for(src)
+            else:
+                await asyncio.to_thread(office_docs.apply_camscan_to_all_pdf_pages, orig, src, mode, strength)
+        else:
+            im = await asyncio.to_thread(office_docs.render_pdf_page_pil, orig, page_num, 200)
+            if mode != "original":
+                im = await asyncio.to_thread(image_fx.camscanner_process, im, mode, 1.3, 1.08, strength)
+            await asyncio.to_thread(office_docs.replace_pdf_page_pil, src, page_num, im)
+        return {"success": True, "file_id": file_id, "mode": mode, "strength": strength}
+
     if mode == "original":
         shutil.copy2(orig, src)
     else:
@@ -1345,6 +1480,7 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
         _update_orig_backup(src)
     elif ext == "pdf":
         import pypdf
+        import office_docs
         reader = pypdf.PdfReader(src)
         writer = pypdf.PdfWriter()
         for p in reader.pages:
@@ -1354,6 +1490,8 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
         with open(temp_out, "wb") as f_out:
             writer.write(f_out)
         os.replace(temp_out, src)
+        _update_orig_backup(src)
+        office_docs._clear_nup_caches_for(src)
     else:
         raise HTTPException(status_code=400, detail="Cannot rotate this file format")
 
@@ -1361,8 +1499,9 @@ async def rotate_file_endpoint(payload: dict = Body(...)):
 
 
 @app.post("/api/image/save-crop")
-async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(...), side: str = Form("front")):
-    """Receives pixel-perfect cropped canvas blob from client Cropper.js."""
+async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(...), side: str = Form("front"), page: int = Form(1)):
+    """Receives pixel-perfect cropped canvas blob from client Cropper.js (supports images, NID, and PDF pages)."""
+    import office_docs
     file_id = os.path.basename(file_id)
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
@@ -1371,13 +1510,17 @@ async def save_cropped_image(file_id: str = Form(...), file: UploadFile = File(.
     else:
         dest = resolve_upload(file_id)
 
-    if utils.get_ext(dest) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images can be cropped")
+    ext = utils.get_ext(dest)
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        raise HTTPException(status_code=400, detail="Only images and PDFs can be cropped")
 
     content = await file.read()
     with Image.open(io.BytesIO(content)) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        im.save(dest, "JPEG", quality=95)
+        if ext == "pdf":
+            await asyncio.to_thread(office_docs.replace_pdf_page_pil, dest, int(page or 1), im)
+        else:
+            im.save(dest, "JPEG", quality=95)
     _update_orig_backup(dest)
 
     return {"success": True, "file_id": file_id}
@@ -1422,9 +1565,10 @@ async def replace_cutout_endpoint(
 
 
 @app.get("/api/image/detect-corners")
-def detect_corners_endpoint(file_id: str, side: str = "front"):
-    """Automatically detects the 4 corners of a tilted document or ID card."""
+def detect_corners_endpoint(file_id: str, side: str = "front", page: int = 1):
+    """Automatically detects the 4 corners of a tilted document, PDF page, or ID card."""
     import image_fx
+    import office_docs
     safe_id = os.path.basename(str(file_id or ""))
     if safe_id.startswith("nid_") and not safe_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = safe_id[4:]
@@ -1432,6 +1576,11 @@ def detect_corners_endpoint(file_id: str, side: str = "front"):
         src = back if side == "back" else front
     else:
         src = resolve_upload(safe_id)
+
+    if utils.get_ext(src) == "pdf":
+        im = office_docs.render_pdf_page_pil(src, page_num=page, dpi=140)
+        pts = image_fx.detect_document_corners(im)
+        return {"success": True, "points": pts}
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
@@ -1443,11 +1592,13 @@ def detect_corners_endpoint(file_id: str, side: str = "front"):
 async def perspective_crop_endpoint(payload: dict = Body(...)):
     """
     CamScanner-style 4-corner Smart Perspective Crop:
-    Takes 4 uneven/tilted corner coordinates and warps them into a straight rectangle.
+    Takes 4 uneven/tilted corner coordinates and warps them into a straight rectangle (supports images, NID, and PDF pages).
     """
     import image_fx
+    import office_docs
     file_id = os.path.basename(str(payload.get("file_id", "")))
     side = str(payload.get("side", "front"))
+    page_num = max(1, int(payload.get("page", 1) or 1))
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
         front, back = nid_paths(token)
@@ -1455,8 +1606,9 @@ async def perspective_crop_endpoint(payload: dict = Body(...)):
     else:
         src = resolve_upload(file_id)
 
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images can be perspective-cropped")
+    ext = utils.get_ext(src)
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        raise HTTPException(status_code=400, detail="Only images and PDFs can be perspective-cropped")
 
     raw_pts = payload.get("points", [])
     if not isinstance(raw_pts, list) or len(raw_pts) < 4:
@@ -1475,6 +1627,15 @@ async def perspective_crop_endpoint(payload: dict = Body(...)):
     }
     target_ratio = ratio_map.get(ratio_key, None)
     enhance_mode = clean_choice(str(payload.get("enhance_mode", "none")).strip(), ("none", "magic_color", "bw_doc", "hd_clear", "grayscale"), "none")
+
+    if ext == "pdf":
+        im = await asyncio.to_thread(office_docs.render_pdf_page_pil, src, page_num, 220)
+        warped = await asyncio.to_thread(image_fx.perspective_crop_4points, im, norm_pts, target_ratio)
+        if enhance_mode != "none":
+            warped = await asyncio.to_thread(image_fx.camscanner_process, warped, enhance_mode)
+        await asyncio.to_thread(office_docs.replace_pdf_page_pil, src, page_num, warped)
+        _update_orig_backup(src)
+        return {"success": True, "file_id": file_id}
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
@@ -1513,8 +1674,10 @@ def perspective_crop_preview_endpoint(payload: dict = Body(...)):
     without overwriting the file on disk yet (until the user clicks OK).
     """
     import image_fx
+    import office_docs
     file_id = os.path.basename(str(payload.get("file_id", "")))
     side = str(payload.get("side", "front"))
+    page_num = max(1, int(payload.get("page", 1) or 1))
     if file_id.startswith("nid_") and not file_id.endswith((".jpg", ".jpeg", ".png", ".webp")):
         token = file_id[4:]
         front, back = nid_paths(token)
@@ -1522,8 +1685,9 @@ def perspective_crop_preview_endpoint(payload: dict = Body(...)):
     else:
         src = resolve_upload(file_id)
 
-    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
-        raise HTTPException(status_code=400, detail="Only images can be perspective-cropped")
+    ext = utils.get_ext(src)
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        raise HTTPException(status_code=400, detail="Only images and PDFs can be perspective-cropped")
 
     raw_pts = payload.get("points", [])
     if not isinstance(raw_pts, list) or len(raw_pts) < 4:
@@ -1542,6 +1706,15 @@ def perspective_crop_preview_endpoint(payload: dict = Body(...)):
     }
     target_ratio = ratio_map.get(ratio_key, None)
     enhance_mode = clean_choice(str(payload.get("enhance_mode", "none")).strip(), ("none", "magic_color", "bw_doc", "hd_clear", "grayscale"), "none")
+
+    if ext == "pdf":
+        im = office_docs.render_pdf_page_pil(src, page_num=page_num, dpi=170)
+        warped = image_fx.perspective_crop_4points(im, norm_pts, target_ratio=target_ratio, max_out_dim=1000)
+        if enhance_mode != "none":
+            warped = image_fx.camscanner_process(warped, mode=enhance_mode)
+        buf = io.BytesIO()
+        warped.save(buf, "JPEG", quality=84)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
