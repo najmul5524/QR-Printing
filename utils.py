@@ -276,8 +276,17 @@ def _to_jpeg(img: Image.Image, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
-def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: str = "color", orientation: str = "portrait") -> bytes:
-    """What a single image will look like on the paper."""
+def render_image_preview(
+    image_path: str,
+    paper_size: str = "A4",
+    color_mode: str = "color",
+    orientation: str = "portrait",
+    pos_x: float = 0.5,
+    pos_y: float = 0.5,
+    scale: float = 1.0,
+    fit_mode: str = "contain"
+) -> bytes:
+    """What a single image will look like on the paper, respecting custom position and scale."""
     if paper_size == "4x6":
         sheet = build_passport_sheet(image_path, 6, color_mode)
         sheet = sheet.resize((1000, int(sheet.height * 1000 / sheet.width)), Image.Resampling.LANCZOS)
@@ -293,13 +302,41 @@ def render_image_preview(image_path: str, paper_size: str = "A4", color_mode: st
         im = ImageOps.exif_transpose(im).convert("RGB")
         im = _apply_color_mode(im, color_mode)
         margin = 32
-        fitted = ImageOps.contain(im, (page_w - 2 * margin, page_h - 2 * margin), Image.Resampling.BILINEAR)
-        page.paste(fitted, ((page_w - fitted.width) // 2, (page_h - fitted.height) // 2))
+        avail_w = max(10, page_w - 2 * margin)
+        avail_h = max(10, page_h - 2 * margin)
+
+        scale = max(0.1, min(1.0, float(scale)))
+        pos_x = max(0.0, min(1.0, float(pos_x)))
+        pos_y = max(0.0, min(1.0, float(pos_y)))
+
+        if fit_mode == "actual" and im.width <= avail_w and im.height <= avail_h:
+            w = max(10, int(im.width * scale))
+            h = max(10, int(im.height * scale))
+            fitted = im.resize((w, h), Image.Resampling.BILINEAR)
+        else:
+            target_max_w = max(10, int(avail_w * scale))
+            target_max_h = max(10, int(avail_h * scale))
+            fitted = ImageOps.contain(im, (target_max_w, target_max_h), Image.Resampling.BILINEAR)
+
+        max_paste_x = page_w - 2 * margin - fitted.width
+        max_paste_y = page_h - 2 * margin - fitted.height
+        paste_x = margin + int(max(0.0, max_paste_x) * pos_x)
+        paste_y = margin + int(max(0.0, max_paste_y) * pos_y)
+        page.paste(fitted, (paste_x, paste_y))
     return _to_jpeg(page)
 
 
-def save_a4_image_sheet(image_path: str, output_path: str, color_mode: str = "color", orientation: str = "portrait") -> str:
-    """Saves an uploaded image onto a 200 DPI A4 Portrait or Landscape sheet so printing/downloading respects orientation & color mode."""
+def save_a4_image_sheet(
+    image_path: str,
+    output_path: str,
+    color_mode: str = "color",
+    orientation: str = "portrait",
+    pos_x: float = 0.5,
+    pos_y: float = 0.5,
+    scale: float = 1.0,
+    fit_mode: str = "contain"
+) -> str:
+    """Saves an uploaded image onto a 200 DPI A4 Portrait or Landscape sheet with customizable position and scale."""
     try:
         # 200 DPI A4: 1654 x 2339 (Portrait) or 2339 x 1654 (Landscape)
         if orientation == "landscape":
@@ -311,8 +348,27 @@ def save_a4_image_sheet(image_path: str, output_path: str, color_mode: str = "co
             im = ImageOps.exif_transpose(im).convert("RGB")
             im = _apply_color_mode(im, color_mode)
             margin = 56
-            fitted = ImageOps.contain(im, (page_w - 2 * margin, page_h - 2 * margin), Image.Resampling.LANCZOS)
-            page.paste(fitted, ((page_w - fitted.width) // 2, (page_h - fitted.height) // 2))
+            avail_w = max(10, page_w - 2 * margin)
+            avail_h = max(10, page_h - 2 * margin)
+
+            scale = max(0.1, min(1.0, float(scale)))
+            pos_x = max(0.0, min(1.0, float(pos_x)))
+            pos_y = max(0.0, min(1.0, float(pos_y)))
+
+            if fit_mode == "actual" and im.width <= avail_w and im.height <= avail_h:
+                w = max(10, int(im.width * scale))
+                h = max(10, int(im.height * scale))
+                fitted = im.resize((w, h), Image.Resampling.LANCZOS)
+            else:
+                target_max_w = max(10, int(avail_w * scale))
+                target_max_h = max(10, int(avail_h * scale))
+                fitted = ImageOps.contain(im, (target_max_w, target_max_h), Image.Resampling.LANCZOS)
+
+            max_paste_x = page_w - 2 * margin - fitted.width
+            max_paste_y = page_h - 2 * margin - fitted.height
+            paste_x = margin + int(max(0.0, max_paste_x) * pos_x)
+            paste_y = margin + int(max(0.0, max_paste_y) * pos_y)
+            page.paste(fitted, (paste_x, paste_y))
         page.save(output_path, "JPEG", quality=92, dpi=(200, 200))
         return output_path
     except Exception as e:

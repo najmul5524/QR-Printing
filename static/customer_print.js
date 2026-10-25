@@ -229,10 +229,15 @@
         if (pageNav) pageNav.classList.add('hidden');
         if (loader) loader.classList.add('hidden');
         img.style.filter = isBw ? 'grayscale(100%)' : 'none';
-        const revKey = `${uploadedFile.file_id}_${fileRev}`;
+        const revKey = `${uploadedFile.file_id}_${fileRev}_${orient}_${colorParam}`;
         if (forceReloadImg || img.dataset.revKey !== revKey) {
           img.dataset.revKey = revKey;
-          img.src = instantLocalUrl || `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=900&v=${fileRev}`;
+          if (currentMode === 'studio') {
+            img.src = instantLocalUrl || `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=900&v=${fileRev}`;
+          } else {
+            // Document mode A4 sheet preview with exact image location
+            img.src = `/api/preview-page/${encodeURIComponent(uploadedFile.file_id)}?page=1&paper_size=A4&color=${colorParam}&orientation=${orient}&v=${fileRev}`;
+          }
         }
       } else {
         const nup = parseInt(checked('pages_per_sheet') || '1', 10);
@@ -507,10 +512,20 @@
     const btnCam = $('btnOpenCamScan');
     const btnRbg = $('btnOpenRemoveBg');
     const btnOfficeEdit = $('btnOpenOfficeEdit');
+    const btnImgPos = $('btnOpenImagePosition');
+    const barImgPos = $('imgPosQuickBar');
+    const isSingleImgA4 = isImg && !uploadedFile.is_nid && currentMode !== 'studio';
+
     if (btnCrop) btnCrop.classList.toggle('hidden', !canCropOrScan);
     if (btnCam) btnCam.classList.toggle('hidden', !canCropOrScan);
     if (btnRbg) btnRbg.classList.toggle('hidden', !isImg);
     if (btnOfficeEdit) btnOfficeEdit.classList.toggle('hidden', !isPdf || !!uploadedFile.is_nid);
+    if (btnImgPos) btnImgPos.classList.toggle('hidden', !isSingleImgA4);
+    if (barImgPos) barImgPos.classList.toggle('hidden', !isSingleImgA4);
+
+    if (isSingleImgA4) {
+      loadImagePositionConfig(uploadedFile.file_id);
+    }
 
     if (uploadedFile.office_orientation === 'landscape') {
       selectRadio('optLandscape');
@@ -1189,6 +1204,12 @@
       nid_rot_front: nidRot.front,
       nid_rot_back: nidRot.back,
       orientation: checked('orientation') || 'portrait',
+      image_pos: (uploadedFile && uploadedFile.file_type === 'image' && currentMode !== 'studio') ? {
+        pos_x: imagePositionState.pos_x,
+        pos_y: imagePositionState.pos_y,
+        scale: imagePositionState.scale,
+        fit_mode: imagePositionState.fit_mode
+      } : undefined,
       printer_target: (currentMode === 'studio'
         ? ($('studioPrinterSelect') ? $('studioPrinterSelect').value : '')
         : ($('printerSelect') ? $('printerSelect').value : '')) || '',
@@ -3242,6 +3263,313 @@
       openPrintPreview();
     });
   }
+
+  // ── Image Position & Scale Drag-and-Drop Management ──
+  let imagePositionState = {
+    pos_x: 0.5,
+    pos_y: 0.5,
+    scale: 1.0,
+    fit_mode: 'contain'
+  };
+
+  async function loadImagePositionConfig(fileId) {
+    try {
+      const res = await fetch(`/api/image-position/get/${encodeURIComponent(fileId)}?t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.config) {
+          imagePositionState = {
+            pos_x: typeof data.config.pos_x === 'number' ? data.config.pos_x : 0.5,
+            pos_y: typeof data.config.pos_y === 'number' ? data.config.pos_y : 0.5,
+            scale: typeof data.config.scale === 'number' ? data.config.scale : 1.0,
+            fit_mode: data.config.fit_mode || 'contain'
+          };
+        }
+      }
+    } catch (_) {}
+  }
+
+  window.openImagePositionModal = function() {
+    if (!uploadedFile || uploadedFile.file_type !== 'image') return;
+    const modal = $('imagePositionModal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+
+    const orient = checked('orientation') || 'portrait';
+    const canvas = $('imgPosPaperCanvas');
+    if (canvas) {
+      if (orient === 'landscape') {
+        canvas.className = 'w-[280px] sm:w-[320px] aspect-[297/210] bg-white rounded shadow-lg border-2 border-violet-400 p-2 relative overflow-hidden transition-all select-none cursor-crosshair';
+      } else {
+        canvas.className = 'w-[220px] sm:w-[250px] aspect-[210/297] bg-white rounded shadow-lg border-2 border-violet-400 p-2 relative overflow-hidden transition-all select-none cursor-crosshair';
+      }
+    }
+
+    const imgEl = $('imgPosDraggableImg');
+    const box = $('imgPosDraggableBox');
+    if (imgEl && box) {
+      const srcUrl = instantLocalUrl || `/api/preview/${encodeURIComponent(uploadedFile.file_id)}?w=600&v=${fileRev}`;
+      imgEl.src = srcUrl;
+      imgEl.onload = function() {
+        updateModalBoxFromState();
+        initInteractiveCanvasDrag();
+      };
+      if (imgEl.complete && imgEl.naturalWidth) {
+        updateModalBoxFromState();
+        initInteractiveCanvasDrag();
+      }
+    }
+  };
+
+  window.closeImagePositionModal = function() {
+    const modal = $('imagePositionModal');
+    if (modal) modal.classList.add('hidden');
+  };
+
+  function updateModalBoxFromState() {
+    const canvas = $('imgPosPaperCanvas');
+    const box = $('imgPosDraggableBox');
+    const imgEl = $('imgPosDraggableImg');
+    if (!canvas || !box || !imgEl) return;
+
+    const canvasW = canvas.clientWidth || 240;
+    const canvasH = canvas.clientHeight || 340;
+    const margin = 10;
+    const availW = Math.max(20, canvasW - 2 * margin);
+    const availH = Math.max(20, canvasH - 2 * margin);
+
+    const nw = imgEl.naturalWidth || 300;
+    const nh = imgEl.naturalHeight || 200;
+    const imgAspect = nw / nh;
+    const availAspect = availW / availH;
+
+    let baseW, baseH;
+    if (imagePositionState.fit_mode === 'actual') {
+      const pxRatio = canvasW / 827;
+      baseW = Math.min(availW, Math.max(30, nw * pxRatio));
+      baseH = Math.min(availH, Math.max(30, nh * pxRatio));
+    } else {
+      if (imgAspect > availAspect) {
+        baseW = availW;
+        baseH = availW / imgAspect;
+      } else {
+        baseH = availH;
+        baseW = availH * imgAspect;
+      }
+    }
+
+    const boxW = Math.max(24, Math.round(baseW * imagePositionState.scale));
+    const boxH = Math.max(24, Math.round(baseH * imagePositionState.scale));
+
+    box.style.width = boxW + 'px';
+    box.style.height = boxH + 'px';
+
+    const maxLeft = Math.max(0, canvasW - 2 * margin - boxW);
+    const maxTop = Math.max(0, canvasH - 2 * margin - boxH);
+
+    const left = margin + Math.round(maxLeft * imagePositionState.pos_x);
+    const top = margin + Math.round(maxTop * imagePositionState.pos_y);
+
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+
+    const pctX = Math.round(imagePositionState.pos_x * 100);
+    const pctY = Math.round(imagePositionState.pos_y * 100);
+    const coordsText = $('imgPosCoordsText');
+    if (coordsText) {
+      coordsText.innerText = `অবস্থান: ডানে ${pctX}%, নিচে ${pctY}%`;
+    }
+
+    const slider = $('imgPosScaleSlider');
+    const scaleText = $('imgPosScaleText');
+    if (slider) slider.value = Math.round(imagePositionState.scale * 100);
+    if (scaleText) {
+      if (imagePositionState.fit_mode === 'actual') {
+        scaleText.innerText = '📷 আসল সাইজ (Actual Size)';
+      } else {
+        scaleText.innerText = `${Math.round(imagePositionState.scale * 100)}% সাইজ`;
+      }
+    }
+  }
+
+  let canvasDragInitialized = false;
+  function initInteractiveCanvasDrag() {
+    const canvas = $('imgPosPaperCanvas');
+    const box = $('imgPosDraggableBox');
+    if (!canvas || !box || canvasDragInitialized) return;
+    canvasDragInitialized = true;
+
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let startLeft = 0, startTop = 0;
+
+    function onPointerDown(e) {
+      e.preventDefault();
+      isDragging = true;
+      try { box.setPointerCapture(e.pointerId); } catch (_) {}
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = box.offsetLeft;
+      startTop = box.offsetTop;
+      box.classList.add('cursor-grabbing');
+    }
+
+    function onPointerMove(e) {
+      if (!isDragging) return;
+      e.preventDefault();
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      const canvasW = canvas.clientWidth || 240;
+      const canvasH = canvas.clientHeight || 340;
+      const margin = 10;
+      const boxW = box.offsetWidth;
+      const boxH = box.offsetHeight;
+
+      const maxLeft = Math.max(0, canvasW - 2 * margin - boxW);
+      const maxTop = Math.max(0, canvasH - 2 * margin - boxH);
+
+      let newLeft = Math.max(margin, Math.min(margin + maxLeft, startLeft + dx));
+      let newTop = Math.max(margin, Math.min(margin + maxTop, startTop + dy));
+
+      box.style.left = newLeft + 'px';
+      box.style.top = newTop + 'px';
+
+      imagePositionState.pos_x = maxLeft > 0 ? (newLeft - margin) / maxLeft : 0.5;
+      imagePositionState.pos_y = maxTop > 0 ? (newTop - margin) / maxTop : 0.5;
+
+      const pctX = Math.round(imagePositionState.pos_x * 100);
+      const pctY = Math.round(imagePositionState.pos_y * 100);
+      const coordsText = $('imgPosCoordsText');
+      if (coordsText) {
+        coordsText.innerText = `অবস্থান: ডানে ${pctX}%, নিচে ${pctY}%`;
+      }
+    }
+
+    function onPointerUp(e) {
+      if (!isDragging) return;
+      isDragging = false;
+      try { box.releasePointerCapture(e.pointerId); } catch (_) {}
+      box.classList.remove('cursor-grabbing');
+    }
+
+    box.addEventListener('pointerdown', onPointerDown);
+    box.addEventListener('pointermove', onPointerMove);
+    box.addEventListener('pointerup', onPointerUp);
+    box.addEventListener('pointercancel', onPointerUp);
+  }
+
+  window.nudgeImagePosition = function(dx, dy) {
+    imagePositionState.pos_x = Math.max(0, Math.min(1, imagePositionState.pos_x + dx));
+    imagePositionState.pos_y = Math.max(0, Math.min(1, imagePositionState.pos_y + dy));
+    updateModalBoxFromState();
+    const modal = $('imagePositionModal');
+    if (!modal || modal.classList.contains('hidden')) {
+      saveImagePositionAndApply(false);
+    }
+  };
+
+  window.setImagePositionPreset = function(x, y, scale = null) {
+    imagePositionState.pos_x = x;
+    imagePositionState.pos_y = y;
+    if (scale !== null) {
+      imagePositionState.scale = scale;
+      imagePositionState.fit_mode = 'contain';
+    }
+    updateModalBoxFromState();
+    const modal = $('imagePositionModal');
+    if (!modal || modal.classList.contains('hidden')) {
+      saveImagePositionAndApply(false);
+    }
+  };
+
+  window.onImageScaleSliderChange = function(val) {
+    imagePositionState.scale = Math.max(0.1, Math.min(1.0, parseFloat(val) / 100));
+    imagePositionState.fit_mode = 'contain';
+    updateModalBoxFromState();
+  };
+
+  window.setImageScalePreset = function(sc) {
+    imagePositionState.scale = sc;
+    imagePositionState.fit_mode = 'contain';
+    updateModalBoxFromState();
+  };
+
+  window.setImageActualSizePreset = function() {
+    imagePositionState.fit_mode = 'actual';
+    imagePositionState.scale = 1.0;
+    updateModalBoxFromState();
+  };
+
+  window.saveImagePositionAndApply = async function(showFeedback = true) {
+    if (!uploadedFile) return;
+    const btn = $('btnSaveImagePosition');
+    if (btn && showFeedback) {
+      btn.disabled = true;
+      btn.innerText = 'সেভ হচ্ছে...';
+    }
+    try {
+      await fetch('/api/image-position/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_id: uploadedFile.file_id,
+          pos_x: imagePositionState.pos_x,
+          pos_y: imagePositionState.pos_y,
+          scale: imagePositionState.scale,
+          fit_mode: imagePositionState.fit_mode
+        })
+      });
+
+      uploadedFile.image_pos = { ...imagePositionState };
+      bumpFileRev();
+      closeImagePositionModal();
+      refreshTopLivePreview(true);
+    } catch (e) {
+      if (showFeedback) alert('পজিশন সেভ ব্যর্থ হয়েছে: ' + e);
+    } finally {
+      if (btn && showFeedback) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>✅</span> <span>ঠিক আছে (OK / পজিশন সেট করুন)</span>';
+      }
+    }
+  };
+
+  // Direct Drag on Main Live Preview Sheet for Images
+  (function initSheetLiveDrag() {
+    const sheet = $('docPaperSheet');
+    if (!sheet) return;
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let origPosX = 0.5, origPosY = 0.5;
+
+    sheet.addEventListener('pointerdown', function(e) {
+      if (!uploadedFile || uploadedFile.file_type !== 'image' || currentMode === 'studio') return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      origPosX = imagePositionState.pos_x;
+      origPosY = imagePositionState.pos_y;
+      sheet.style.cursor = 'grabbing';
+      try { sheet.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    sheet.addEventListener('pointermove', function(e) {
+      if (!isDragging) return;
+      const dx = (e.clientX - startX) / (sheet.clientWidth || 240);
+      const dy = (e.clientY - startY) / (sheet.clientHeight || 340);
+      imagePositionState.pos_x = Math.max(0, Math.min(1, origPosX + dx));
+      imagePositionState.pos_y = Math.max(0, Math.min(1, origPosY + dy));
+    });
+
+    sheet.addEventListener('pointerup', function(e) {
+      if (!isDragging) return;
+      isDragging = false;
+      sheet.style.cursor = '';
+      try { sheet.releasePointerCapture(e.pointerId); } catch (_) {}
+      saveImagePositionAndApply(false);
+    });
+  })();
 
   // Restore previously uploaded file across page refresh
   restoreSessionState();

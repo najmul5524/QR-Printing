@@ -1271,8 +1271,65 @@ def preview_info(file_id: str, nup: int = 1):
     return {"can_render": True, "sheets": 1, "pages": 1}
 
 
+def get_image_pos_config(file_id: str) -> dict:
+    fid = os.path.splitext(file_id)[0]
+    p = os.path.join(UPLOAD_DIR, f"img_pos_{fid}.json")
+    if os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"pos_x": 0.5, "pos_y": 0.5, "scale": 1.0, "fit_mode": "contain"}
+
+
+@app.post("/api/image-position/save")
+async def save_image_position(payload: dict = Body(...)):
+    file_id = str(payload.get("file_id", ""))
+    src = resolve_upload(file_id)
+    if utils.get_ext(src) not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="শুধু ছবির পজিশন পরিবর্তন করা যাবে")
+    fid = os.path.splitext(file_id)[0]
+    try:
+        pos_x = float(payload.get("pos_x", 0.5))
+        pos_y = float(payload.get("pos_y", 0.5))
+        scale = float(payload.get("scale", 1.0))
+    except (TypeError, ValueError):
+        pos_x, pos_y, scale = 0.5, 0.5, 1.0
+    fit_mode = str(payload.get("fit_mode", "contain"))
+
+    cfg = {
+        "pos_x": max(0.0, min(1.0, pos_x)),
+        "pos_y": max(0.0, min(1.0, pos_y)),
+        "scale": max(0.1, min(1.0, scale)),
+        "fit_mode": "actual" if fit_mode == "actual" else "contain"
+    }
+    p = os.path.join(UPLOAD_DIR, f"img_pos_{fid}.json")
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False)
+
+    return {"success": True, "config": cfg}
+
+
+@app.get("/api/image-position/get/{file_id}")
+async def get_image_position_endpoint(file_id: str):
+    resolve_upload(file_id)
+    return {"success": True, "config": get_image_pos_config(file_id)}
+
+
 @app.get("/api/preview-page/{file_id}")
-def preview_page(file_id: str, page: int = 1, paper_size: str = "A4", nup: int = 1, color: str = "color", orientation: str = "portrait"):
+def preview_page(
+    file_id: str,
+    page: int = 1,
+    paper_size: str = "A4",
+    nup: int = 1,
+    color: str = "color",
+    orientation: str = "portrait",
+    pos_x: Optional[float] = None,
+    pos_y: Optional[float] = None,
+    scale: Optional[float] = None,
+    fit_mode: Optional[str] = None
+):
     orientation = clean_choice(orientation, ("portrait", "landscape"), "portrait")
     """Renders ONE printed sheet exactly as it will come out of the printer."""
     path = resolve_upload(file_id)
@@ -1292,7 +1349,21 @@ def preview_page(file_id: str, page: int = 1, paper_size: str = "A4", nup: int =
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Preview failed: {e}")
     else:
-        data = utils.render_image_preview(path, clean_choice(paper_size, ("A4", "4x6"), "A4"), color, orientation=orientation)
+        cfg = get_image_pos_config(file_id)
+        px = pos_x if pos_x is not None else cfg.get("pos_x", 0.5)
+        py = pos_y if pos_y is not None else cfg.get("pos_y", 0.5)
+        sc = scale if scale is not None else cfg.get("scale", 1.0)
+        fm = fit_mode if fit_mode is not None else cfg.get("fit_mode", "contain")
+        data = utils.render_image_preview(
+            path,
+            clean_choice(paper_size, ("A4", "4x6"), "A4"),
+            color,
+            orientation=orientation,
+            pos_x=px,
+            pos_y=py,
+            scale=sc,
+            fit_mode=fm
+        )
 
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=120"})
 
@@ -1836,8 +1907,28 @@ async def customer_create_order(request: Request):
             total_price = shop["rate_photo_4x6"] * copies
         else:
             if file_type == "image":
+                cfg = get_image_pos_config(file_id)
+                img_pos_payload = data.get("image_pos") or {}
+                try:
+                    pos_x = float(img_pos_payload.get("pos_x", cfg.get("pos_x", 0.5)))
+                    pos_y = float(img_pos_payload.get("pos_y", cfg.get("pos_y", 0.5)))
+                    scale = float(img_pos_payload.get("scale", cfg.get("scale", 1.0)))
+                except (TypeError, ValueError):
+                    pos_x, pos_y, scale = 0.5, 0.5, 1.0
+                fit_mode = str(img_pos_payload.get("fit_mode", cfg.get("fit_mode", "contain")))
+
                 a4_path = os.path.join(UPLOAD_DIR, f"a4_{orientation}_{os.path.splitext(file_id)[0]}.jpg")
-                await asyncio.to_thread(utils.save_a4_image_sheet, file_path, a4_path, color_mode, orientation)
+                await asyncio.to_thread(
+                    utils.save_a4_image_sheet,
+                    file_path,
+                    a4_path,
+                    color_mode,
+                    orientation,
+                    pos_x=pos_x,
+                    pos_y=pos_y,
+                    scale=scale,
+                    fit_mode=fit_mode
+                )
                 if a4_path != file_path:
                     utils.secure_delete_file(file_path)
                 file_path = a4_path
