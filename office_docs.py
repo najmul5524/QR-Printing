@@ -795,12 +795,10 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                 actual_tbl_w_pt = sum(final_col_pts) if final_col_pts else target_w_pt
 
-                col_pcts: List[float] = []
-                if final_col_pts:
-                    total_pts = sum(final_col_pts) or 1.0
-                    col_pcts = [round((w / total_pts) * 100.0, 2) for w in final_col_pts]
-                    diff_pct = 100.0 - sum(col_pcts)
-                    col_pcts[-1] = round(col_pcts[-1] + diff_pct, 2)
+                # Calculate individual cell content widths for Story (Story adds 10.8pt padding + 1pt border)
+                # By providing explicit content width per cell, Story renders EXACT Word column dimensions!
+                padding_and_border_pt = 11.8
+                cell_content_pts = [max(10.0, round(w - padding_and_border_pt, 1)) for w in final_col_pts]
 
                 # 3. Pre-scan vertical merges (w:vMerge) across rows to prevent column shifts
                 vmerge_info: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -916,6 +914,11 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                         elif not cell_inner:
                             cell_inner = "&nbsp;"
 
+                        w_pt_style = ""
+                        if cell_content_pts and curr_col < len(cell_content_pts):
+                            span_w = sum(cell_content_pts[curr_col : curr_col + colspan]) + (colspan - 1) * padding_and_border_pt
+                            w_pt_style = f"width:{span_w:.1f}pt;"
+
                         c_styles = [
                             "border:1px solid #1e293b",
                             "padding:2.5pt 5.4pt",
@@ -925,6 +928,8 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                             "word-break:break-word",
                             "overflow-wrap:break-word",
                         ]
+                        if w_pt_style:
+                            c_styles.append(w_pt_style)
                         if row_h_pt:
                             c_styles.append(f"height:{row_h_pt:.1f}pt")
                         if cell_bg:
@@ -959,9 +964,9 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                 elif tbl_align == "right":
                     margin_css = "margin:6px 0 6px auto;"
 
-                tbl_w_style = "width:100%;" if table_is_full_width else f"width:{target_w_pt:.1f}pt; max-width:100%;"
-                table_css = f"border-collapse:collapse; {tbl_w_style} table-layout:fixed; {margin_css} font-size:10pt;"
-                return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{colgroup_html}{"".join(t_rows)}</table>'
+                tbl_w_style = "width:100%;" if table_is_full_width else f"width:{actual_tbl_w_pt:.1f}pt; max-width:100%;"
+                table_css = f"border-collapse:collapse; {tbl_w_style} {margin_css} font-size:10pt;"
+                return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{"".join(t_rows)}</table>'
             for elem in body:
                 if elem.tag == f"{W_NS}p":
                     parts.append(render_paragraph(elem, in_table=False))
@@ -1538,6 +1543,44 @@ def sheets_to_html(sheets: List[Dict[str, Any]], title: str = "", orientation: s
     return "\n".join(blocks) if blocks else "<p>&nbsp;</p>"
 
 
+def sanitize_story_html(html: str) -> str:
+    """
+    Sanitizes HTML before feeding to PyMuPDF Story:
+    1. Ensures all <table> elements have border-collapse: collapse; max-width: 100%;
+    2. Ensures all <td> and <th> elements preserve crisp borders (border: 1px solid #1e293b)
+       and removes any accidental 'border:none' or 'border:0' from editor operations.
+    """
+    if not html:
+        return html
+
+    def clean_table(m):
+        attrs = m.group(1)
+        if 'border-collapse' not in attrs:
+            if 'style="' in attrs:
+                attrs = re.sub(r'style="([^"]*)"', r'style="border-collapse:collapse; max-width:100%; \1"', attrs)
+            else:
+                attrs += ' style="border-collapse:collapse; max-width:100%;"'
+        elif 'max-width' not in attrs:
+            attrs = re.sub(r'style="([^"]*)"', r'style="max-width:100%; \1"', attrs)
+        return f'<table {attrs}>'
+
+    html = re.sub(r'<table\s+([^>]+)>', clean_table, html, flags=re.IGNORECASE)
+
+    def clean_cell(m):
+        tag = m.group(1)
+        attrs = m.group(2)
+        attrs = re.sub(r'border\s*:\s*(none|0|transparent)[^;]*;?', '', attrs, flags=re.IGNORECASE)
+        if 'border:' not in attrs and 'border-width:' not in attrs:
+            if 'style="' in attrs:
+                attrs = re.sub(r'style="([^"]*)"', r'style="border:1px solid #1e293b; \1"', attrs)
+            else:
+                attrs += ' style="border:1px solid #1e293b;"'
+        return f'<{tag} {attrs}>'
+
+    html = re.sub(r'<(td|th)\s+([^>]+)>', clean_cell, html, flags=re.IGNORECASE)
+    return html
+
+
 def render_html_to_pdf(
     html_body: str,
     pdf_out_path: str,
@@ -1551,6 +1594,7 @@ def render_html_to_pdf(
     if _fitz is None:
         raise RuntimeError("PyMuPDF (fitz) is required for Office document rendering")
 
+    html_body = sanitize_story_html(html_body)
     top_m, right_m, bottom_m, left_m = margins
 
     full_html = f"""<!DOCTYPE html>

@@ -1132,7 +1132,7 @@ async def save_office_editable_content(payload: dict = Body(...)):
         html_body = office_docs.sheets_to_html(sheets, title=title, orientation=orientation)
     else:
         sheets = None
-        html_body = str(payload.get("html", "<p>&nbsp;</p>"))
+        html_body = office_docs.sanitize_story_html(str(payload.get("html", "<p>&nbsp;</p>")))
 
     raw_margins = payload.get("margins")
     margins_tuple = (

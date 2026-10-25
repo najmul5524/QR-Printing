@@ -2923,14 +2923,18 @@
         document.body.style.userSelect = 'none';
 
         if (activeTable) {
+          const firstRow = activeTable.rows[0];
+          const colsCount = firstRow ? firstRow.children.length : 1;
+          const tblWidth = activeTable.offsetWidth || 500;
           let cg = activeTable.querySelector('colgroup');
           if (!cg) {
             cg = document.createElement('colgroup');
-            const colsCount = activeTable.rows[0] ? activeTable.rows[0].children.length : 1;
-            const initP = (100 / colsCount).toFixed(2);
             for (let c = 0; c < colsCount; c++) {
+              const cell = firstRow.children[c];
+              const cellW = cell ? (cell.offsetWidth || cell.getBoundingClientRect().width) : (tblWidth / colsCount);
+              const p = Math.max(3, (cellW / tblWidth) * 100);
               const colEl = document.createElement('col');
-              colEl.style.width = initP + '%';
+              colEl.style.width = p.toFixed(2) + '%';
               cg.appendChild(colEl);
             }
             activeTable.insertBefore(cg, activeTable.firstChild);
@@ -2961,16 +2965,48 @@
         const diffPct = (diffX / tblWidth) * 100;
         const cg = activeTable.querySelector('colgroup');
         if (cg && cg.children[activeColIndex] && cg.children[nextColIndex]) {
-          const newPct1 = Math.max(4, Math.min(combinedPct - 4, initPct1 + diffPct));
+          const newPct1 = Math.max(3, Math.min(combinedPct - 3, initPct1 + diffPct));
           const newPct2 = combinedPct - newPct1;
           cg.children[activeColIndex].style.width = newPct1.toFixed(2) + '%';
           cg.children[nextColIndex].style.width = newPct2.toFixed(2) + '%';
+
+          // Keep table width bounded so borders never get clipped
+          activeTable.style.maxWidth = '100%';
+          activeTable.style.borderCollapse = 'collapse';
+
+          // Synchronize explicit point widths on cells in all rows so PyMuPDF Story renders exact resized widths
+          const ptsPerPercent = (tblWidth * 0.75) / 100.0;
+          const wPt1 = Math.max(10, (newPct1 * ptsPerPercent) - 11.8);
+          const wPt2 = Math.max(10, (newPct2 * ptsPerPercent) - 11.8);
+
+          for (let r = 0; r < activeTable.rows.length; r++) {
+            const rowCells = activeTable.rows[r].children;
+            if (rowCells[activeColIndex]) {
+              rowCells[activeColIndex].style.width = wPt1.toFixed(1) + 'pt';
+              rowCells[activeColIndex].style.border = '1px solid #1e293b';
+              rowCells[activeColIndex].style.boxSizing = 'border-box';
+            }
+            if (rowCells[nextColIndex]) {
+              rowCells[nextColIndex].style.width = wPt2.toFixed(1) + 'pt';
+              rowCells[nextColIndex].style.border = '1px solid #1e293b';
+              rowCells[nextColIndex].style.boxSizing = 'border-box';
+            }
+          }
         }
       }
     });
 
     window.addEventListener('mouseup', function() {
       if (resizingType) {
+        if (activeTable) {
+          activeTable.style.maxWidth = '100%';
+          activeTable.style.borderCollapse = 'collapse';
+          const allCells = activeTable.querySelectorAll('td, th');
+          allCells.forEach(c => {
+            c.style.border = '1px solid #1e293b';
+            c.style.boxSizing = 'border-box';
+          });
+        }
         resizingType = null;
         activeCell = null;
         activeRow = null;
