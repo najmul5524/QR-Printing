@@ -310,94 +310,241 @@ def perspective_crop_4points(
     return warped
 
 
+def _keep_largest_central_component(mask: np.ndarray) -> np.ndarray:
+    """
+    Filters a binary foreground mask to keep only the primary connected document/card component
+    near the center of the frame, completely eliminating stray table dust, fingers, or border noise.
+    """
+    from collections import deque
+    h, w = mask.shape
+    step = max(2, min(h, w) // 56)
+    small = mask[::step, ::step]
+    sh, sw = small.shape
+    visited = np.zeros_like(small, dtype=bool)
+    best_comp = []
+    best_score = -1.0
+    cy, cx = sh * 0.5, sw * 0.5
+
+    ys, xs = np.where(small)
+    for y0, x0 in zip(ys, xs):
+        if visited[y0, x0]:
+            continue
+        comp = []
+        q = deque([(int(y0), int(x0))])
+        visited[y0, x0] = True
+        while q:
+            cy_i, cx_i = q.popleft()
+            comp.append((cy_i, cx_i))
+            if cy_i > 0 and not visited[cy_i - 1, cx_i] and small[cy_i - 1, cx_i]:
+                visited[cy_i - 1, cx_i] = True
+                q.append((cy_i - 1, cx_i))
+            if cy_i + 1 < sh and not visited[cy_i + 1, cx_i] and small[cy_i + 1, cx_i]:
+                visited[cy_i + 1, cx_i] = True
+                q.append((cy_i + 1, cx_i))
+            if cx_i > 0 and not visited[cy_i, cx_i - 1] and small[cy_i, cx_i - 1]:
+                visited[cy_i, cx_i - 1] = True
+                q.append((cy_i, cx_i - 1))
+            if cx_i + 1 < sw and not visited[cy_i, cx_i + 1] and small[cy_i, cx_i + 1]:
+                visited[cy_i, cx_i + 1] = True
+                q.append((cy_i, cx_i + 1))
+        if len(comp) < 6:
+            continue
+        arr_c = np.array(comp, dtype=np.float32)
+        mean_y, mean_x = float(np.mean(arr_c[:, 0])), float(np.mean(arr_c[:, 1]))
+        dist_center = float(np.hypot((mean_x - cx) / sw, (mean_y - cy) / sh))
+        score = len(comp) * max(0.25, 1.15 - dist_center * 1.4)
+        if score > best_score:
+            best_score = score
+            best_comp = comp
+
+    if not best_comp:
+        return mask
+
+    clean_small = np.zeros_like(small, dtype=np.uint8)
+    for y_i, x_i in best_comp:
+        clean_small[y_i, x_i] = 255
+    pil_s = Image.fromarray(clean_small, mode="L").filter(ImageFilter.MaxFilter(3))
+    full_gate = np.asarray(pil_s.resize((w, h), Image.Resampling.NEAREST)) > 127
+    return mask & full_gate
+
+
+def _fit_line_robust(u: np.ndarray, v: np.ndarray):
+    """Two-pass outlier-trimmed linear regression v = m * u + c."""
+    if len(u) < 12:
+        return None
+    m, c = np.polyfit(u, v, 1)
+    res = np.abs(v - (m * u + c))
+    inliers = res <= max(1.4, float(np.percentile(res, 72)))
+    if int(np.sum(inliers)) >= 8:
+        m, c = np.polyfit(u[inliers], v[inliers], 1)
+        res = np.abs(v[inliers] - (m * u[inliers] + c))
+    return (float(m), float(c), float(np.median(res)))
+
+
+def _intersect_hv(line_h, line_v, sw: float, sh: float):
+    """Intersects horizontal edge line (y = m_h*x + c_h) with vertical edge line (x = m_v*y + c_v)."""
+    m_h, c_h, _ = line_h
+    m_v, c_v, _ = line_v
+    denom = 1.0 - m_h * m_v
+    if abs(denom) < 1e-6:
+        return None
+    y = (m_h * c_v + c_h) / denom
+    x = m_v * y + c_v
+    return (float(x) / float(sw - 1), float(y) / float(sh - 1))
+
+
 def detect_document_corners(img: Image.Image) -> List[Dict[str, float]]:
     """
-    Automatically estimates the 4 corners of a document or ID card against its background.
-    Combines border color segmentation + edge gradient + morphological denoising + percentile corner projection.
+    High-precision 4-stage document & ID card corner detector:
+    1. Multi-strip border color modeling & Mahalanobis segmentation (with Sobel fallback for white-on-white).
+    2. Morphological denoising + Largest Central Connected Component isolation (eliminates stray background noise).
+    3. True extreme contour vertex localization (never pulls corners inward).
+    4. Gradient-snapped 4-edge robust line fitting & intersection (eliminates drop shadows & recovers rounded NID corners).
     Returns 4 normalized points [{"x": .., "y": ..}, ...] in [TL, TR, BR, BL] order.
     """
     default_pts = [
-        {"x": 0.06, "y": 0.06},
-        {"x": 0.94, "y": 0.06},
-        {"x": 0.94, "y": 0.94},
-        {"x": 0.06, "y": 0.94}
+        {"x": 0.07, "y": 0.07},
+        {"x": 0.93, "y": 0.07},
+        {"x": 0.93, "y": 0.93},
+        {"x": 0.07, "y": 0.93}
     ]
     try:
         small = img.copy().convert("RGB")
-        small.thumbnail((340, 340), Image.Resampling.BILINEAR)
-        # Slight blur to suppress table grain/dust
-        small_smooth = small.filter(ImageFilter.MedianFilter(size=3))
-        arr = np.asarray(small_smooth, dtype=np.float32)
+        small.thumbnail((360, 360), Image.Resampling.BILINEAR)
+        arr = np.asarray(small, dtype=np.float32)
         sh, sw, _ = arr.shape
         if sh < 30 or sw < 30:
             return default_pts
 
-        t = max(2, int(0.045 * min(sh, sw)))
-        border = np.concatenate([
+        # 1. Sample 4 border strips; discard 1 outlier strip if the document touches one edge of the frame
+        t = max(2, int(0.04 * min(sh, sw)))
+        strips = [
             arr[:t, :, :].reshape(-1, 3),
             arr[-t:, :, :].reshape(-1, 3),
             arr[:, :t, :].reshape(-1, 3),
             arr[:, -t:, :].reshape(-1, 3)
-        ])
+        ]
+        strip_meds = np.array([np.median(s, axis=0) for s in strips])
+        global_med = np.median(strip_meds, axis=0)
+        strip_dists = np.linalg.norm(strip_meds - global_med, axis=1)
+        best_indices = np.argsort(strip_dists)[:3]
+        border = np.concatenate([strips[i] for i in best_indices], axis=0)
+
         bg_med = np.median(border, axis=0)
-        bg_std = np.std(border, axis=0) + 10.0
+        bg_std = np.std(border, axis=0) + 12.0
 
         dist = np.sqrt(np.sum(((arr - bg_med) / bg_std) ** 2, axis=2))
+        mask = dist > 1.85
 
-        # Also compute edge gradients so light cards on light tables are detected accurately
+        # Morphological opening (3x3) to remove single-pixel grain
+        mask_img = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+        mask_img = mask_img.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
+        mask = np.asarray(mask_img) > 127
+
+        # Keep only the primary central connected component
+        mask = _keep_largest_central_component(mask)
+
+        # Compute directional image gradients for edge snapping & white-on-white fallback
         gray = np.mean(arr, axis=2)
         gx = np.abs(np.gradient(gray, axis=1))
         gy = np.abs(np.gradient(gray, axis=0))
-        grad = np.hypot(gx, gy)
-        grad_thresh = np.percentile(grad, 86)
 
-        mask = (dist > 1.75) | (grad > max(12.0, grad_thresh))
-        # Ignore 2px outer frame where camera vignette occurs
-        mask[:2, :] = False
-        mask[-2:, :] = False
-        mask[:, :2] = False
-        mask[:, -2:] = False
+        fg_ratio = float(np.mean(mask))
+        if fg_ratio < 0.07 or fg_ratio > 0.95:
+            # Fallback for white paper on white table: use closed strong Sobel edge contour
+            grad = np.hypot(gx, gy)
+            g_mask = grad > max(10.0, float(np.percentile(grad, 88)))
+            g_mask[:2, :] = g_mask[-2:, :] = g_mask[:, :2] = g_mask[:, -2:] = False
+            g_pil = Image.fromarray((g_mask.astype(np.uint8) * 255), mode="L")
+            g_pil = g_pil.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(5))
+            mask = _keep_largest_central_component(np.asarray(g_pil) > 127)
+            fg_ratio = float(np.mean(mask))
+            if fg_ratio < 0.05 or fg_ratio > 0.95:
+                return default_pts
 
-        # Fast 3x3 neighborhood density filter (removes isolated stray noise pixels)
-        m_float = mask.astype(np.float32)
-        neigh = (
-            m_float[:-2, :-2] + m_float[:-2, 1:-1] + m_float[:-2, 2:] +
-            m_float[1:-1, :-2] + m_float[1:-1, 1:-1] + m_float[1:-1, 2:] +
-            m_float[2:, :-2] + m_float[2:, 1:-1] + m_float[2:, 2:]
-        )
-        clean_mask = np.zeros_like(mask)
-        clean_mask[1:-1, 1:-1] = neigh >= 5.0
-
-        fg_ratio = float(np.mean(clean_mask))
-        if fg_ratio < 0.06 or fg_ratio > 0.95:
-            return default_pts
-
-        ys, xs = np.where(clean_mask)
-        if len(xs) < 60:
+        ys, xs = np.where(mask)
+        if len(xs) < 50:
             return default_pts
 
         nx = xs.astype(np.float32) / float(sw - 1)
         ny = ys.astype(np.float32) / float(sh - 1)
 
-        # Use robust 1% / 99% quantile neighbourhood along diagonal projections (x+y and x-y)
+        # 3. Exact extreme vertices along diagonal axes (x+y and x-y)
         s = nx + ny
         d = nx - ny
 
-        def _robust_extreme(metric, pick_max: bool):
-            q = np.percentile(metric, 99.0 if pick_max else 1.0)
-            sel = (metric >= q) if pick_max else (metric <= q)
-            return float(np.median(nx[sel])), float(np.median(ny[sel]))
+        idx_tl = int(np.argmin(s))
+        idx_br = int(np.argmax(s))
+        idx_tr = int(np.argmax(d))
+        idx_bl = int(np.argmin(d))
 
-        tl = _robust_extreme(s, False)
-        br = _robust_extreme(s, True)
-        tr = _robust_extreme(d, True)
-        bl = _robust_extreme(d, False)
+        v_tl = (float(nx[idx_tl]), float(ny[idx_tl]))
+        v_tr = (float(nx[idx_tr]), float(ny[idx_tr]))
+        v_br = (float(nx[idx_br]), float(ny[idx_br]))
+        v_bl = (float(nx[idx_bl]), float(ny[idx_bl]))
+
+        pts = [v_tl, v_tr, v_br, v_bl]
+
+        # 4. Gradient-snapped 4-edge line intersection refinement (recovers rounded ID card corners & removes shadow bleed)
+        x_left_est = max(v_tl[0], v_bl[0])
+        x_right_est = min(v_tr[0], v_br[0])
+        y_top_est = max(v_tl[1], v_tr[1])
+        y_bot_est = min(v_bl[1], v_br[1])
+
+        if (x_right_est - x_left_est) > 0.18 and (y_bot_est - y_top_est) > 0.18:
+            x_lo = int((x_left_est * 0.72 + x_right_est * 0.28) * (sw - 1))
+            x_hi = int((x_left_est * 0.28 + x_right_est * 0.72) * (sw - 1))
+            y_lo = int((y_top_est * 0.72 + y_bot_est * 0.28) * (sh - 1))
+            y_hi = int((y_top_est * 0.28 + y_bot_est * 0.72) * (sh - 1))
+
+            top_x, top_y, bot_x, bot_y = [], [], [], []
+            for x in range(max(2, x_lo), min(sw - 2, x_hi)):
+                col = np.where(mask[:, x])[0]
+                if len(col) > 4:
+                    rt, rb = int(col[0]), int(col[-1])
+                    # Snap within [-2, +5] inward to sharpest vertical gradient (ignores soft drop shadow)
+                    t_lo, t_hi = max(1, rt - 2), min(sh - 2, rt + 5)
+                    b_lo, b_hi = max(1, rb - 5), min(sh - 2, rb + 2)
+                    st = t_lo + int(np.argmax(gy[t_lo:t_hi + 1, x]))
+                    sb = b_lo + int(np.argmax(gy[b_lo:b_hi + 1, x]))
+                    top_x.append(x); top_y.append(st)
+                    bot_x.append(x); bot_y.append(sb)
+
+            left_y, left_x, right_y, right_x = [], [], [], []
+            for y in range(max(2, y_lo), min(sh - 2, y_hi)):
+                row = np.where(mask[y, :])[0]
+                if len(row) > 4:
+                    rl, rr = int(row[0]), int(row[-1])
+                    l_lo, l_hi = max(1, rl - 2), min(sw - 2, rl + 5)
+                    r_lo, r_hi = max(1, rr - 5), min(sw - 2, rr + 2)
+                    sl = l_lo + int(np.argmax(gx[y, l_lo:l_hi + 1]))
+                    sr = r_lo + int(np.argmax(gx[y, r_lo:r_hi + 1]))
+                    left_y.append(y); left_x.append(sl)
+                    right_y.append(y); right_x.append(sr)
+
+            lt = _fit_line_robust(np.array(top_x, dtype=np.float32), np.array(top_y, dtype=np.float32))
+            lb = _fit_line_robust(np.array(bot_x, dtype=np.float32), np.array(bot_y, dtype=np.float32))
+            ll = _fit_line_robust(np.array(left_y, dtype=np.float32), np.array(left_x, dtype=np.float32))
+            lr = _fit_line_robust(np.array(right_y, dtype=np.float32), np.array(right_x, dtype=np.float32))
+
+            if lt and lb and ll and lr and max(lt[2], lb[2], ll[2], lr[2]) <= 2.2:
+                cand_corners = [
+                    _intersect_hv(lt, ll, sw, sh),
+                    _intersect_hv(lt, lr, sw, sh),
+                    _intersect_hv(lb, lr, sw, sh),
+                    _intersect_hv(lb, ll, sw, sh)
+                ]
+                refined = []
+                for v_pt, c_pt in zip(pts, cand_corners):
+                    if c_pt is not None and np.hypot(c_pt[0] - v_pt[0], c_pt[1] - v_pt[1]) <= 0.065:
+                        refined.append(c_pt)
+                    else:
+                        refined.append(v_pt)
+                pts = refined
 
         pts = [
-            (float(np.clip(tl[0], 0.015, 0.985)), float(np.clip(tl[1], 0.015, 0.985))),
-            (float(np.clip(tr[0], 0.015, 0.985)), float(np.clip(tr[1], 0.015, 0.985))),
-            (float(np.clip(br[0], 0.015, 0.985)), float(np.clip(br[1], 0.015, 0.985))),
-            (float(np.clip(bl[0], 0.015, 0.985)), float(np.clip(bl[1], 0.015, 0.985)))
+            (float(np.clip(p[0], 0.015, 0.985)), float(np.clip(p[1], 0.015, 0.985)))
+            for p in pts
         ]
         ordered = order_quad_points(pts)
         return [{"x": round(p[0], 4), "y": round(p[1], 4)} for p in ordered]

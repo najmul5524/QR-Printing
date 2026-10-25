@@ -1363,14 +1363,118 @@
     ];
   }
 
-  window.autoDetectSmartCorners = async function() {
+  function detectCornersClientSide(imgEl) {
+    try {
+      const iw = imgEl.naturalWidth || imgEl.width;
+      const ih = imgEl.naturalHeight || imgEl.height;
+      if (!iw || !ih) return null;
+      const maxD = 180;
+      const sc = Math.min(1, maxD / Math.max(iw, ih));
+      const sw = Math.max(32, Math.round(iw * sc));
+      const sh = Math.max(32, Math.round(ih * sc));
+
+      const cvs = document.createElement('canvas');
+      cvs.width = sw;
+      cvs.height = sh;
+      const ctx = cvs.getContext('2d');
+      ctx.drawImage(imgEl, 0, 0, sw, sh);
+      const d = ctx.getImageData(0, 0, sw, sh).data;
+
+      const t = Math.max(2, Math.round(0.04 * Math.min(sw, sh)));
+      let sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (y < t || y >= sh - t || x < t || x >= sw - t) {
+            const idx = (y * sw + x) << 2;
+            sumR += d[idx]; sumG += d[idx + 1]; sumB += d[idx + 2];
+            cnt++;
+          }
+        }
+      }
+      const meanR = sumR / cnt, meanG = sumG / cnt, meanB = sumB / cnt;
+      let varR = 0, varG = 0, varB = 0;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (y < t || y >= sh - t || x < t || x >= sw - t) {
+            const idx = (y * sw + x) << 2;
+            varR += (d[idx] - meanR) ** 2;
+            varG += (d[idx + 1] - meanG) ** 2;
+            varB += (d[idx + 2] - meanB) ** 2;
+          }
+        }
+      }
+      const stdR = Math.sqrt(varR / cnt) + 12.0;
+      const stdG = Math.sqrt(varG / cnt) + 12.0;
+      const stdB = Math.sqrt(varB / cnt) + 12.0;
+
+      const rawMask = new Uint8Array(sw * sh);
+      for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+        const dr = (d[i] - meanR) / stdR;
+        const dg = (d[i + 1] - meanG) / stdG;
+        const db = (d[i + 2] - meanB) / stdB;
+        if (dr * dr + dg * dg + db * db > 3.42) rawMask[p] = 1;
+      }
+
+      // 3x3 morphological opening/density filter to strip stray dust
+      const mask = new Uint8Array(sw * sh);
+      let fgCount = 0;
+      for (let y = 1; y < sh - 1; y++) {
+        const row = y * sw;
+        for (let x = 1; x < sw - 1; x++) {
+          const p = row + x;
+          if (!rawMask[p]) continue;
+          const n = rawMask[p - sw - 1] + rawMask[p - sw] + rawMask[p - sw + 1] +
+                    rawMask[p - 1] + rawMask[p] + rawMask[p + 1] +
+                    rawMask[p + sw - 1] + rawMask[p + sw] + rawMask[p + sw + 1];
+          if (n >= 6) {
+            mask[p] = 1;
+            fgCount++;
+          }
+        }
+      }
+
+      const ratio = fgCount / (sw * sh);
+      if (ratio < 0.07 || ratio > 0.94) return null;
+
+      let minS = 1e9, maxS = -1e9, maxDVal = -1e9, minDVal = 1e9;
+      let tl = { x: 0.07, y: 0.07 }, tr = { x: 0.93, y: 0.07 }, br = { x: 0.93, y: 0.93 }, bl = { x: 0.07, y: 0.93 };
+      for (let y = 1; y < sh - 1; y++) {
+        const ny = y / (sh - 1);
+        const row = y * sw;
+        for (let x = 1; x < sw - 1; x++) {
+          if (!mask[row + x]) continue;
+          const nx = x / (sw - 1);
+          const s = nx + ny;
+          const df = nx - ny;
+          if (s < minS) { minS = s; tl = { x: nx, y: ny }; }
+          if (s > maxS) { maxS = s; br = { x: nx, y: ny }; }
+          if (df > maxDVal) { maxDVal = df; tr = { x: nx, y: ny }; }
+          if (df < minDVal) { minDVal = df; bl = { x: nx, y: ny }; }
+        }
+      }
+      return [tl, tr, br, bl];
+    } catch (e) {
+      return null;
+    }
+  }
+
+  window.autoDetectSmartCorners = async function(silentIfDragging) {
     if (!uploadedFile) return;
+    if (smartImg && smartImg.complete && (smartImg.naturalWidth || smartImg.width) > 0) {
+      const fastPts = detectCornersClientSide(smartImg);
+      if (fastPts && (!silentIfDragging || activeDragIdx === -1)) {
+        smartPts = fastPts;
+      }
+      drawSmartCrop();
+    }
     try {
       const res = await fetch(`/api/image/detect-corners?file_id=${encodeURIComponent(uploadedFile.file_id)}&side=${encodeURIComponent(cropNidSide)}&t=${Date.now()}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.points) && data.points.length === 4) {
-        smartPts = data.points.map(p => ({ x: +p.x, y: +p.y }));
-        drawSmartCrop();
+        if (!silentIfDragging || activeDragIdx === -1) {
+          smartPts = data.points.map(p => ({ x: +p.x, y: +p.y }));
+          drawSmartCrop();
+        }
       }
     } catch (e) {
       drawSmartCrop();
@@ -1689,8 +1793,7 @@
     smartImg = new Image();
     smartImg.crossOrigin = 'anonymous';
     smartImg.onload = () => {
-      drawSmartCrop();
-      window.autoDetectSmartCorners();
+      window.autoDetectSmartCorners(true);
     };
     smartImg.src = imgUrl;
 
