@@ -3,6 +3,7 @@ import csv
 import html as _html
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -398,6 +399,24 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
     try:
         with zipfile.ZipFile(path, "r") as zf:
             get_numbering_prefix = _parse_docx_numbering(zf)
+            style_num_map: Dict[str, Tuple[str, str]] = {}
+            if "word/styles.xml" in zf.namelist():
+                try:
+                    s_root = ET.fromstring(zf.read("word/styles.xml"))
+                    for style in s_root.findall(f"{W_NS}style"):
+                        s_id = style.attrib.get(f"{W_NS}styleId", "").lower()
+                        pPr_s = style.find(f"{W_NS}pPr")
+                        if pPr_s is not None:
+                            numPr_s = pPr_s.find(f"{W_NS}numPr")
+                            if numPr_s is not None:
+                                il_el = numPr_s.find(f"{W_NS}ilvl")
+                                nid_el = numPr_s.find(f"{W_NS}numId")
+                                il = il_el.attrib.get(f"{W_NS}val", "0") if il_el is not None else "0"
+                                nid = nid_el.attrib.get(f"{W_NS}val", "0") if nid_el is not None else "0"
+                                style_num_map[s_id] = (nid, il)
+                except Exception:
+                    pass
+
             rels_map: Dict[str, str] = {}
             if "word/_rels/document.xml.rels" in zf.namelist():
                 try:
@@ -472,6 +491,11 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                         ilvl_val = ilvl_el.attrib.get(f"{W_NS}val", "0") if ilvl_el is not None else "0"
                         numId_val = numId_el.attrib.get(f"{W_NS}val", "0") if numId_el is not None else "0"
                         num_prefix = get_numbering_prefix(numId_val, ilvl_val)
+                        if not num_prefix:
+                            is_list_item = True
+                    elif style_val and style_val in style_num_map:
+                        nid, il = style_num_map[style_val]
+                        num_prefix = get_numbering_prefix(nid, il)
                         if not num_prefix:
                             is_list_item = True
 
@@ -622,15 +646,15 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                         runs_html.append(chunk)
 
                 inner = "".join(runs_html).strip()
-                if num_prefix and inner:
-                    inner = f'<span style="display:inline-block; min-width:20pt; font-weight:600;">{num_prefix}</span>&nbsp;' + inner
-                elif is_list_item and inner:
-                    inner = '<span style="display:inline-block; min-width:14pt; font-weight:bold;">•</span>&nbsp;' + inner
+                if num_prefix:
+                    inner = f'<span style="display:inline-block; min-width:18pt; font-weight:600;">{num_prefix}</span>' + (f'&nbsp;{inner}' if inner else '')
+                elif is_list_item:
+                    inner = '<span style="display:inline-block; min-width:14pt; font-weight:bold;">•</span>' + (f'&nbsp;{inner}' if inner else '')
 
                 style_attr = f' style="{"; ".join(p_styles)};"' if p_styles else ""
 
                 if not inner:
-                    return "" if in_table else "<p style='margin:3px 0;'>&nbsp;</p>"
+                    return "" if in_table else "<p style='margin:2px 0;'>&nbsp;</p>"
                 if "heading1" in style_val or style_val == "title":
                     return f"<h2{style_attr}>{inner}</h2>"
                 if "heading2" in style_val or "heading3" in style_val:
@@ -671,10 +695,11 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                         except Exception:
                             raw_col_widths_dxa.append(1000.0)
 
+                rows_el = tbl_el.findall(f"{W_NS}tr")
                 # Fallback: scan rows to infer column widths from cells
                 if not raw_col_widths_dxa:
                     inferred: Dict[int, float] = {}
-                    for tr in tbl_el.findall(f"{W_NS}tr"):
+                    for tr in rows_el:
                         c_idx = 0
                         for tc in tr.findall(f"{W_NS}tc"):
                             c_span = 1
@@ -702,16 +727,67 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                 col_pts = [w / 20.0 for w in raw_col_widths_dxa]
                 total_grid_pt = sum(col_pts) if col_pts else avail_w_pt
-                target_w_pt = min(specified_tbl_w_pt if (specified_tbl_w_pt and specified_tbl_w_pt > 50) else total_grid_pt, avail_w_pt)
-                if total_grid_pt > 0 and col_pts:
+
+                # In Word, tables default to 100% of printable width between margins (avail_w_pt)
+                # unless explicitly set to a fixed narrow width in dxa (< 0.85 of avail_w_pt).
+                if specified_tbl_w_pt and specified_tbl_w_pt > 50 and specified_tbl_w_pt < (avail_w_pt * 0.85):
+                    target_w_pt = min(specified_tbl_w_pt, avail_w_pt)
+                else:
+                    target_w_pt = avail_w_pt
+
+                num_cols = len(col_pts)
+                is_dummy_equal = False
+                if num_cols > 1 and col_pts:
+                    min_w = min(col_pts)
+                    max_w = max(col_pts)
+                    if (max_w - min_w) < 2.0:
+                        is_dummy_equal = True
+
+                if is_dummy_equal and num_cols > 1:
+                    col_char_counts: List[int] = [0] * num_cols
+                    for tr in rows_el:
+                        c_cur = 0
+                        for tc in tr.findall(f"{W_NS}tc"):
+                            c_span = 1
+                            tcPr = tc.find(f"{W_NS}tcPr")
+                            if tcPr is not None:
+                                gs = tcPr.find(f"{W_NS}gridSpan")
+                                if gs is not None:
+                                    try:
+                                        c_span = max(1, int(gs.attrib.get(f"{W_NS}val", "1") or 1))
+                                    except Exception:
+                                        c_span = 1
+                            t_len = sum(len(t.text or "") for t in tc.iter(f"{W_NS}t"))
+                            if c_cur < num_cols and c_span == 1:
+                                col_char_counts[c_cur] = max(col_char_counts[c_cur], t_len)
+                            c_cur += c_span
+
+                    weights: List[float] = []
+                    for idx, ch_cnt in enumerate(col_char_counts):
+                        if idx == 0 and ch_cnt <= 6:
+                            w = max(28.0, min(50.0, 34.0 + ch_cnt * 2.0))
+                        elif ch_cnt == 0:
+                            w = 38.0
+                        else:
+                            w = max(45.0, 28.0 + (ch_cnt ** 0.5) * 18.0)
+                        weights.append(w)
+                    total_w = sum(weights)
+                    final_col_pts = [round((w / total_w) * target_w_pt, 1) for w in weights]
+                    diff = target_w_pt - sum(final_col_pts)
+                    if final_col_pts:
+                        final_col_pts[-1] = round(final_col_pts[-1] + diff, 1)
+                elif total_grid_pt > 0 and col_pts:
                     scale = target_w_pt / total_grid_pt
                     final_col_pts = [max(16.0, round(w * scale, 1)) for w in col_pts]
+                    diff = target_w_pt - sum(final_col_pts)
+                    if final_col_pts:
+                        final_col_pts[-1] = round(final_col_pts[-1] + diff, 1)
                 else:
                     final_col_pts = []
+
                 actual_tbl_w_pt = sum(final_col_pts) if final_col_pts else target_w_pt
 
                 # 3. Pre-scan vertical merges (w:vMerge) across rows to prevent column shifts
-                rows_el = tbl_el.findall(f"{W_NS}tr")
                 vmerge_info: Dict[Tuple[int, int], Dict[str, Any]] = {}
                 active_vmerges: Dict[int, Tuple[int, int]] = {}
 
@@ -751,6 +827,7 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                         col_cursor += colspan
 
+                first_col_is_sl = False
                 t_rows: List[str] = []
                 for r_i, tr in enumerate(rows_el):
                     trPr = tr.find(f"{W_NS}trPr")
@@ -795,11 +872,12 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                         rowspan = vm.get("rowspan", 1)
 
-                        # Explicit point width for this cell from final_col_pts (never % which Story ignores)
                         w_pt_style = ""
                         if final_col_pts and col_cursor < len(final_col_pts):
                             span_w = sum(final_col_pts[col_cursor : col_cursor + colspan])
                             w_pt_style = f"width:{span_w:.1f}pt; max-width:{span_w:.1f}pt;"
+
+                        curr_col = col_cursor
                         col_cursor += colspan
 
                         cell_blocks: List[str] = []
@@ -811,12 +889,24 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
                             elif sub_el.tag == f"{W_NS}tbl":
                                 cell_blocks.append(render_table(sub_el))
 
-                        cell_inner = "".join(cell_blocks) or "&nbsp;"
+                        raw_cell_text = "".join(t.text or "" for t in tc.iter(f"{W_NS}t")).strip()
+                        if r_i == 0 and curr_col == 0:
+                            hdr_clean = re.sub(r"[^\w#]", "", raw_cell_text.lower())
+                            if any(k in hdr_clean for k in ("sl", "serial", "\u0995\u09cd\u09b0\u09ae\u09bf\u0995", "\u0995\u09cd\u09b0", "#")) or hdr_clean in ("no", "num", "number", "slno"):
+                                first_col_is_sl = True
+
+                        cell_inner = "".join(cell_blocks)
+                        if (not cell_inner or cell_inner == "&nbsp;") and curr_col == 0 and r_i >= 1 and first_col_is_sl:
+                            cell_inner = f"<p style='margin:1px 0; font-weight:600;'>{r_i}.</p>"
+                        elif not cell_inner:
+                            cell_inner = "&nbsp;"
+
                         c_styles = [
-                            "border:1px solid #334155",
-                            "padding:4px 6px",
+                            "border:1px solid #1e293b",
+                            "padding:2.5pt 5.4pt",
                             f"vertical-align:{v_align}",
                             "box-sizing:border-box",
+                            "line-height:1.15",
                         ]
                         if w_pt_style:
                             c_styles.append(w_pt_style)
@@ -852,7 +942,6 @@ def _parse_docx_to_html_and_meta(path: str) -> Tuple[str, str, Tuple[float, floa
 
                 table_css = f"border-collapse:collapse; width:{actual_tbl_w_pt:.1f}pt; max-width:100%; {margin_css} font-size:10pt;"
                 return f'<table border="1" cellspacing="0" cellpadding="4" style="{table_css}">{colgroup_html}{"".join(t_rows)}</table>'
-
             for elem in body:
                 if elem.tag == f"{W_NS}p":
                     parts.append(render_paragraph(elem, in_table=False))
@@ -1457,28 +1546,31 @@ def render_html_to_pdf(
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Kalpurush", "SolaimanLipi", "Nirmala UI", Arial, sans-serif;
-    font-size: 10.5pt;
-    line-height: 1.42;
-    color: #0f172a;
+    font-family: "Calibri", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Kalpurush", "SolaimanLipi", "Nirmala UI", Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.18;
+    color: #000000;
   }}
   h1, h2, h3 {{
-    color: #0f172a;
+    color: #000000;
     margin-top: 6px;
-    margin-bottom: 5px;
+    margin-bottom: 4px;
+    line-height: 1.2;
   }}
   p {{
-    margin-top: 2px;
-    margin-bottom: 3px;
+    margin-top: 0;
+    margin-bottom: 3.5pt;
+    line-height: 1.18;
   }}
   table {{
     border-collapse: collapse;
-    margin-top: 6px;
-    margin-bottom: 8px;
+    margin-top: 4pt;
+    margin-bottom: 6pt;
   }}
   td, th {{
-    border: 1px solid #334155;
-    padding: 4px 6px;
+    border: 1px solid #1e293b;
+    padding: 2.5pt 5.4pt;
+    line-height: 1.15;
   }}
 </style>
 </head>
